@@ -1,0 +1,6 @@
+C/libevoca.dylib
+C/libevoca.so
+python/__pycache__/
+.ipynb_checkpoints/
+jupyter.out
+.DS_Store
