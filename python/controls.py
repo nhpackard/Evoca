@@ -41,6 +41,8 @@ from IPython.display import display as ipy_display
 from .evoca_py import cgenom_to_pattern
 from multiprocessing.shared_memory import SharedMemory
 
+import ctypes
+
 COLOR_MODES      = ["state", "env-food", "priv-food"]
 _SLIDER_RESUME_S = 0.20   # seconds after last slider touch before auto-resume
 _WORKER          = os.path.join(os.path.dirname(__file__), "sdl_worker.py")
@@ -48,11 +50,21 @@ _WORKER          = os.path.join(os.path.dirname(__file__), "sdl_worker.py")
 # ctrl_shm layout (5 × int32)
 _QUIT, _CMODE, _STEP, _FPS10, _PAUSED = 0, 1, 2, 3, 4
 
+# Probe strip-chart constants
+PROBE_W = 512    # pixels = time steps visible
+PROBE_H = 128    # pixel height of each strip chart
+
+# Map probe name → C getter function name
+_PROBE_GETTER = {
+    'env_food':  'evoca_get_F',
+    'priv_food': 'evoca_get_f',
+}
+
 # Module-level handle: stop any previous session before starting a new one.
 _active_stop = None
 
 
-def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
+def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None):
     """
     Display ipywidgets controls and open an SDL2 simulation window.
 
@@ -65,6 +77,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
     cell_px   : screen pixels per cell (default: sim.cell_px from CELL_PX #define)
     colormode : initial colour mode (0=state, 1=env-food, 2=priv-food)
     paused    : if True, start in paused state
+    probes    : dict of probe names to enable, e.g. {'env_food': True, 'priv_food': True}
 
     Returns
     -------
@@ -88,11 +101,44 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
     ctrl   = np.ndarray((5,),     dtype=np.int32, buffer=ctrl_shm.buf)
     ctrl[:] = [0, colormode, 0, 0, int(paused)]
 
+    # ── Probe setup ─────────────────────────────────────────────────
+    probe_names = [k for k, v in (probes or {}).items() if v and k in _PROBE_GETTER]
+    n_probes    = len(probe_names)
+    probe_shm   = None
+    probe_cursor = None       # int32 view into probe_shm
+    probe_means  = []         # list of float32[PROBE_W] views
+    probe_stds   = []         # list of float32[PROBE_W] views
+
+    # Build list of C getter functions for fast access in sim thread
+    probe_getters = []
+    for pname in probe_names:
+        getter = getattr(sim._lib, _PROBE_GETTER[pname])
+        getter.argtypes = []
+        getter.restype  = ctypes.POINTER(ctypes.c_float)
+        probe_getters.append(getter)
+
+    if n_probes > 0:
+        probe_shm_size = 4 + n_probes * 2 * PROBE_W * 4
+        probe_shm = SharedMemory(create=True, size=probe_shm_size)
+        _pbuf = np.ndarray((probe_shm_size,), dtype=np.uint8, buffer=probe_shm.buf)
+        _pbuf[:] = 0
+        probe_cursor = np.ndarray((1,), dtype=np.int32, buffer=probe_shm.buf)
+        off = 4
+        for _ in range(n_probes):
+            probe_means.append(np.ndarray((PROBE_W,), dtype=np.float32,
+                                          buffer=probe_shm.buf, offset=off))
+            off += PROBE_W * 4
+            probe_stds.append(np.ndarray((PROBE_W,), dtype=np.float32,
+                                         buffer=probe_shm.buf, offset=off))
+            off += PROBE_W * 4
+
     # ── SDL2 subprocess ───────────────────────────────────────────
+    cmd = [sys.executable, _WORKER,
+           pixel_shm.name, ctrl_shm.name, str(N), str(px)]
+    if n_probes > 0:
+        cmd += [probe_shm.name, ",".join(probe_names)]
     sdl_proc = subprocess.Popen(
-        [sys.executable, _WORKER,
-         pixel_shm.name, ctrl_shm.name, str(N), str(px)],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
 
     # Relay subprocess output to the terminal (for diagnostics)
@@ -121,7 +167,10 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
                 sdl_proc.wait(timeout=2)
             except Exception:
                 pass
-        for shm in (pixel_shm, ctrl_shm):
+        all_shm = [pixel_shm, ctrl_shm]
+        if probe_shm is not None:
+            all_shm.append(probe_shm)
+        for shm in all_shm:
             try:
                 shm.unlink()
             except Exception:
@@ -156,6 +205,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
     btn_quit  = widgets.Button(
         description="Quit",  button_style="danger",
         layout=widgets.Layout(width="70px"))
+    btn_save  = widgets.Button(
+        description="Save Plots", layout=widgets.Layout(width="100px"))
 
     sl_kw = dict(continuous_update=True,
                  style={"description_width": "90px"},
@@ -195,7 +246,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
     plt.show()
 
     ipy_display(widgets.VBox([
-        widgets.HBox([btn_pause, btn_step, btn_quit]),
+        widgets.HBox([btn_pause, btn_step, btn_quit, btn_save]),
         sl_food_inc, sl_m_scale, sl_food_repro, sl_gdiff,
         widgets.HBox([color_dd, status_lbl]),
     ]))
@@ -224,6 +275,14 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
             st['step_cnt'] += 1
             ctrl[_STEP] = st['step_cnt']
             sim.colorize(pixels, st['colormode'])
+            if n_probes > 0:
+                cur = int(probe_cursor[0])
+                for pi, getter in enumerate(probe_getters):
+                    ptr = getter()
+                    arr = np.ctypeslib.as_array(ptr, shape=(N * N,))
+                    probe_means[pi][cur] = arr.mean()
+                    probe_stds[pi][cur]  = arr.std()
+                probe_cursor[0] = (cur + 1) % PROBE_W
             status_lbl.value = f"t={st['step_cnt']}  (paused)"
 
     def on_quit(_):
@@ -239,9 +298,30 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
         st['colormode'] = cm
         ctrl[_CMODE]    = cm
 
+    def on_save(_):
+        if not _alive[0] or n_probes == 0:
+            return
+        cur = int(probe_cursor[0])
+        for i, pname in enumerate(probe_names):
+            # Reconstruct time-ordered arrays from ring buffer
+            m = np.roll(probe_means[i], -cur)
+            s = np.roll(probe_stds[i], -cur)
+            t = np.arange(PROBE_W)
+            fig_s, ax_s = plt.subplots(figsize=(8, 2.5))
+            ax_s.fill_between(t, m - s, m + s, alpha=0.3)
+            ax_s.plot(t, m, linewidth=0.8)
+            ax_s.set_title(pname)
+            ax_s.set_xlabel("t (relative)")
+            fig_s.tight_layout()
+            fname = f"probe_{pname}.png"
+            fig_s.savefig(fname, dpi=150)
+            plt.close(fig_s)
+        status_lbl.value = f"Saved {n_probes} probe plot(s)"
+
     btn_pause.observe(on_pause_toggle, names='value')
     btn_step.on_click(on_step)
     btn_quit.on_click(on_quit)
+    btn_save.on_click(on_save)
     color_dd.observe(on_color, names='value')
 
     # Slider drag: pause on first touch, auto-resume after 200 ms idle
@@ -306,6 +386,16 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
 
             # colorize writes directly into shared pixel memory
             sim.colorize(pixels, st['colormode'])
+
+            # Record probe data
+            if n_probes > 0:
+                cur = int(probe_cursor[0])
+                for pi, getter in enumerate(probe_getters):
+                    ptr = getter()
+                    arr = np.ctypeslib.as_array(ptr, shape=(N * N,))
+                    probe_means[pi][cur] = arr.mean()
+                    probe_stds[pi][cur]  = arr.std()
+                probe_cursor[0] = (cur + 1) % PROBE_W
 
             # FPS (only meaningful when running)
             t_now = time.perf_counter()
