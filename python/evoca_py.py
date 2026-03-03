@@ -37,6 +37,22 @@ def lut_bit_index(v_x, n1, n2, n3, n4, n5):
     return v_x*5625 + n1*1125 + n2*225 + n3*45 + n4*5 + n5
 
 
+# D4-symmetric orbit map for the 5×5 fiducial pattern.
+# 6 independent orbits (bits 0–5 of cgenom).
+ORBIT_MAP = np.array([
+    [4, 5, 2, 5, 4],
+    [5, 3, 1, 3, 5],
+    [2, 1, 0, 1, 2],
+    [5, 3, 1, 3, 5],
+    [4, 5, 2, 5, 4],
+], dtype=np.uint8)
+
+
+def cgenom_to_pattern(cg):
+    """Expand a 6-bit cgenom value to a 5×5 binary numpy array."""
+    return ((cg >> ORBIT_MAP) & 1).astype(np.uint8)
+
+
 def _find_lib():
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.join(here, "..")
@@ -58,6 +74,7 @@ class EvoCA:
         self.m_scale     = 0.0
         self.food_repro  = 0.5
         self.gdiff       = 0
+        self.cgenom      = 0
         self._setup_signatures()
 
     def _setup_signatures(self):
@@ -167,7 +184,8 @@ class EvoCA:
             int(idx), arr.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)))
 
     def set_cgenom_all(self, cg):
-        self._lib.evoca_set_cgenom_all(int(cg) & 0x3F)
+        self.cgenom = int(cg) & 0x3F
+        self._lib.evoca_set_cgenom_all(self.cgenom)
 
     def set_f_all(self, f):
         self._lib.evoca_set_f_all(float(f))

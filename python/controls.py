@@ -36,7 +36,9 @@ import time
 
 import numpy as np
 import ipywidgets as widgets
+import matplotlib.pyplot as plt
 from IPython.display import display as ipy_display
+from .evoca_py import cgenom_to_pattern
 from multiprocessing.shared_memory import SharedMemory
 
 COLOR_MODES      = ["state", "env-food", "priv-food"]
@@ -155,6 +157,19 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
         description="Color:",
         layout=widgets.Layout(width="200px"))
     status_lbl = widgets.Label(value="Starting…")
+
+    # ── Fiducial pattern display ─────────────────────────────────────
+    pat = cgenom_to_pattern(sim.cgenom)
+    fig, ax = plt.subplots(figsize=(2, 2))
+    ax.imshow(pat, cmap='Greys', vmin=0, vmax=1, interpolation='nearest')
+    for edge in range(6):
+        ax.axhline(edge - 0.5, color='gray', linewidth=0.5)
+        ax.axvline(edge - 0.5, color='gray', linewidth=0.5)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title(f'fiducial c(x)   cg=0b{sim.cgenom:06b}', fontsize=9)
+    plt.tight_layout()
+    plt.show()
 
     ipy_display(widgets.VBox([
         widgets.HBox([btn_pause, btn_step, btn_quit]),

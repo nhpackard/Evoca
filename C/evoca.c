@@ -283,7 +283,7 @@ void evoca_step(void)
             memcpy(lut + (size_t)child * LUT_BYTES,
                    lut + (size_t)idx   * LUT_BYTES, LUT_BYTES);
             cgenom[child] = cgenom[idx];
-            v_curr[child] = v_curr[idx];
+            /* v_curr is dynamical state, not genome — do not copy */
             float half    = f_priv[idx] * 0.5f;
             f_priv[idx]   = half;
             f_priv[child] = half;
