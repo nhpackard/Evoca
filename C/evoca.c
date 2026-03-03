@@ -77,6 +77,7 @@ static uint8_t *cgenom = NULL;   /* [N*N]            */
 static float   *f_priv = NULL;   /* [N*N]            */
 static float   *F_food = NULL;   /* [N*N]            */
 static float   *F_temp = NULL;   /* [N*N] scratch for diffusion */
+static uint8_t *births = NULL;   /* [N*N] birth events this step */
 
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
@@ -96,6 +97,7 @@ void evoca_init(int N, float food_inc, float m_scale, float food_repro)
     f_priv = calloc(cells,               sizeof(float));
     F_food = calloc(cells,               sizeof(float));
     F_temp = calloc(cells,               sizeof(float));
+    births = calloc(cells,               sizeof(uint8_t));
 }
 
 void evoca_free(void)
@@ -107,6 +109,7 @@ void evoca_free(void)
     free(f_priv); f_priv = NULL;
     free(F_food); F_food = NULL;
     free(F_temp); F_temp = NULL;
+    free(births); births = NULL;
     gN = 0;
 }
 
@@ -254,6 +257,7 @@ void evoca_step(void)
     }
 
     /* Phase 4: Reproduction */
+    memset(births, 0, cells);
     for (int row = 0; row < N; row++) {
         for (int col = 0; col < N; col++) {
             int idx = row * N + col;
@@ -283,6 +287,7 @@ void evoca_step(void)
             memcpy(lut + (size_t)child * LUT_BYTES,
                    lut + (size_t)idx   * LUT_BYTES, LUT_BYTES);
             cgenom[child] = cgenom[idx];
+            births[child] = 1;
             /* v_curr is dynamical state, not genome — do not copy */
             float half    = f_priv[idx] * 0.5f;
             f_priv[idx]   = half;
@@ -320,6 +325,16 @@ void evoca_colorize(int32_t *pixels, int colormode)
                              | ((uint32_t)r << 16) | (uint32_t)b);
             }
             break;
+        case 3:
+            for (size_t i = 0; i < cells; i++) {
+                if (births[i])
+                    pixels[i] = v_curr[i] ? (int32_t)0xFFFFFF00u
+                                          : (int32_t)0xFF808000u;
+                else
+                    pixels[i] = v_curr[i] ? (int32_t)0xFF444444u
+                                          : (int32_t)0xFF000000u;
+            }
+            break;
         default:
             for (size_t i = 0; i < cells; i++)
                 pixels[i] = (int32_t)0xFF000000;
@@ -333,5 +348,6 @@ float   *evoca_get_F(void)      { return F_food; }
 float   *evoca_get_f(void)      { return f_priv; }
 uint8_t *evoca_get_cgenom(void) { return cgenom; }
 uint8_t *evoca_get_lut(void)    { return lut;    }
+uint8_t *evoca_get_births(void) { return births; }
 int      evoca_get_N(void)      { return gN;     }
 int      evoca_get_cell_px(void) { return CELL_PX; }

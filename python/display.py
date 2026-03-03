@@ -24,7 +24,7 @@ import numpy as np
 import sdl2
 import sdl2.ext
 
-COLOR_MODES = ["state", "env-food", "priv-food"]
+COLOR_MODES = ["state", "env-food", "priv-food", "births"]
 
 
 def run(sim, cell_px=None, colormode=0, steps=-1):

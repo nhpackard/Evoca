@@ -37,6 +37,7 @@ CURSOR_COLOR  = _c(0xFF444444)
 _PROBE_COLORS = {
     'env_food':  (_c(0xFF00CC00), _c(0xFF003300)),   # green
     'priv_food': (_c(0xFF4488FF), _c(0xFF112244)),   # blue
+    'births':    (_c(0xFFFFFF00), _c(0xFF444400)),   # yellow
 }
 _DEFAULT_COLORS = (_c(0xFFCCCCCC), _c(0xFF333333))   # grey fallback
 
@@ -157,7 +158,7 @@ def main():
                                              buffer=probe_shm.buf, offset=off))
                 off += PROBE_W * 4
 
-    COLOR_MODES = ["state", "env-food", "priv-food"]
+    COLOR_MODES = ["state", "env-food", "priv-food", "births"]
 
     # ── SDL2 init ─────────────────────────────────────────────────
     if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) != 0:
@@ -212,6 +213,7 @@ def main():
     _Y_FIXED = {
         'env_food':  (0.0, 1.0),
         'priv_food': (0.0, 1.0),
+        'births':    (0.0, 1.0),
     }
 
     probe_windows  = []   # SDL_Window pointers
@@ -313,7 +315,7 @@ def main():
 
         # Window title
         step   = int(ctrl[2])
-        mode   = COLOR_MODES[min(int(ctrl[1]), 2)]
+        mode   = COLOR_MODES[min(int(ctrl[1]), 3)]
         paused = bool(ctrl[4])
         if paused:
             title = f"EvoCA  PAUSED  t={step}  color={mode}"

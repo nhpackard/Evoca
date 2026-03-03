@@ -43,7 +43,7 @@ from multiprocessing.shared_memory import SharedMemory
 
 import ctypes
 
-COLOR_MODES      = ["state", "env-food", "priv-food"]
+COLOR_MODES      = ["state", "env-food", "priv-food", "births"]
 _SLIDER_RESUME_S = 0.20   # seconds after last slider touch before auto-resume
 _WORKER          = os.path.join(os.path.dirname(__file__), "sdl_worker.py")
 
@@ -54,10 +54,11 @@ _QUIT, _CMODE, _STEP, _FPS10, _PAUSED = 0, 1, 2, 3, 4
 PROBE_W = 512    # pixels = time steps visible
 PROBE_H = 128    # pixel height of each strip chart
 
-# Map probe name → C getter function name
+# Map probe name → (C getter function name, ctype element type)
 _PROBE_GETTER = {
-    'env_food':  'evoca_get_F',
-    'priv_food': 'evoca_get_f',
+    'env_food':  ('evoca_get_F',      ctypes.c_float),
+    'priv_food': ('evoca_get_f',      ctypes.c_float),
+    'births':    ('evoca_get_births', ctypes.c_uint8),
 }
 
 # Module-level handle: stop any previous session before starting a new one.
@@ -109,13 +110,14 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     probe_means  = []         # list of float32[PROBE_W] views
     probe_stds   = []         # list of float32[PROBE_W] views
 
-    # Build list of C getter functions for fast access in sim thread
-    probe_getters = []
+    # Build list of (C getter func, numpy dtype) for fast access in sim thread
+    probe_getters = []   # list of (getter_fn, np.dtype)
     for pname in probe_names:
-        getter = getattr(sim._lib, _PROBE_GETTER[pname])
+        fn_name, ctype = _PROBE_GETTER[pname]
+        getter = getattr(sim._lib, fn_name)
         getter.argtypes = []
-        getter.restype  = ctypes.POINTER(ctypes.c_float)
-        probe_getters.append(getter)
+        getter.restype  = ctypes.POINTER(ctype)
+        probe_getters.append((getter, np.dtype(ctype)))
 
     if n_probes > 0:
         probe_shm_size = 4 + n_probes * 2 * PROBE_W * 4
@@ -277,11 +279,12 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
             sim.colorize(pixels, st['colormode'])
             if n_probes > 0:
                 cur = int(probe_cursor[0])
-                for pi, getter in enumerate(probe_getters):
+                for pi, (getter, dt) in enumerate(probe_getters):
                     ptr = getter()
                     arr = np.ctypeslib.as_array(ptr, shape=(N * N,))
-                    probe_means[pi][cur] = arr.mean()
-                    probe_stds[pi][cur]  = arr.std()
+                    farr = arr.astype(np.float64) if dt != np.float32 else arr
+                    probe_means[pi][cur] = farr.mean()
+                    probe_stds[pi][cur]  = farr.std()
                 probe_cursor[0] = (cur + 1) % PROBE_W
             status_lbl.value = f"t={st['step_cnt']}  (paused)"
 
@@ -390,11 +393,12 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
             # Record probe data
             if n_probes > 0:
                 cur = int(probe_cursor[0])
-                for pi, getter in enumerate(probe_getters):
+                for pi, (getter, dt) in enumerate(probe_getters):
                     ptr = getter()
                     arr = np.ctypeslib.as_array(ptr, shape=(N * N,))
-                    probe_means[pi][cur] = arr.mean()
-                    probe_stds[pi][cur]  = arr.std()
+                    farr = arr.astype(np.float64) if dt != np.float32 else arr
+                    probe_means[pi][cur] = farr.mean()
+                    probe_stds[pi][cur]  = farr.std()
                 probe_cursor[0] = (cur + 1) % PROBE_W
 
             # FPS (only meaningful when running)

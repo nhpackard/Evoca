@@ -123,6 +123,8 @@ class EvoCA:
         L.evoca_get_cgenom.restype      = ctypes.POINTER(ctypes.c_uint8)
         L.evoca_get_lut.argtypes        = []
         L.evoca_get_lut.restype         = ctypes.POINTER(ctypes.c_uint8)
+        L.evoca_get_births.argtypes     = []
+        L.evoca_get_births.restype      = ctypes.POINTER(ctypes.c_uint8)
         L.evoca_get_N.argtypes          = []
         L.evoca_get_N.restype           = ctypes.c_int
         L.evoca_get_cell_px.argtypes    = []
@@ -244,6 +246,12 @@ class EvoCA:
     def get_cgenom(self):
         """Return (N, N) uint8 array of fiducial genomes (6-bit values)."""
         ptr = self._lib.evoca_get_cgenom()
+        return np.ctypeslib.as_array(ptr, shape=(self._N * self._N,)) \
+                 .copy().reshape(self._N, self._N)
+
+    def get_births(self):
+        """Return (N, N) uint8 array of birth events from last step."""
+        ptr = self._lib.evoca_get_births()
         return np.ctypeslib.as_array(ptr, shape=(self._N * self._N,)) \
                  .copy().reshape(self._N, self._N)
 

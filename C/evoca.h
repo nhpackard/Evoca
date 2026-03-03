@@ -73,7 +73,8 @@ void evoca_step(void);
 /* Fill pixels[N*N] with int32 ARGB values.
    colormode 0: binary cell state (dead=black, alive=white)
    colormode 1: env food F as green; alive cells tinted red
-   colormode 2: private food f as blue; alive cells tinted red */
+   colormode 2: private food f as blue; alive cells tinted red
+   colormode 3: birth events (yellow=birth, dim=alive, black=dead) */
 void evoca_colorize(int32_t *pixels, int colormode);
 
 /* ── Accessors ──────────────────────────────────────────────────────── */
@@ -83,6 +84,7 @@ float   *evoca_get_F(void);
 float   *evoca_get_f(void);
 uint8_t *evoca_get_cgenom(void);
 uint8_t *evoca_get_lut(void);    /* [N*N * LUT_BYTES] */
+uint8_t *evoca_get_births(void); /* [N*N] birth events last step */
 int      evoca_get_N(void);
 int      evoca_get_cell_px(void);
 int      evoca_get_gdiff(void);
