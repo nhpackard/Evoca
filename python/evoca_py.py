@@ -127,6 +127,10 @@ class EvoCA:
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     def init(self, N, food_inc=0.0, m_scale=1.0, food_repro=0.5, gdiff=0):
+        stop = getattr(self, '_stop_display', None)
+        if stop is not None:
+            stop()
+            self._stop_display = None
         self._N         = N
         self.food_inc   = float(food_inc)
         self.m_scale    = float(m_scale)
@@ -136,6 +140,10 @@ class EvoCA:
         self._lib.evoca_set_gdiff(self.gdiff)
 
     def free(self):
+        stop = getattr(self, '_stop_display', None)
+        if stop is not None:
+            stop()
+            self._stop_display = None
         self._lib.evoca_free()
         self._N = 0
 

@@ -48,6 +48,9 @@ _WORKER          = os.path.join(os.path.dirname(__file__), "sdl_worker.py")
 # ctrl_shm layout (5 × int32)
 _QUIT, _CMODE, _STEP, _FPS10, _PAUSED = 0, 1, 2, 3, 4
 
+# Module-level handle: stop any previous session before starting a new one.
+_active_stop = None
+
 
 def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
     """
@@ -67,6 +70,12 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
     -------
     threading.Thread — the simulation thread (can be .join()-ed if desired)
     """
+    # ── Tear down any previous session ────────────────────────────
+    global _active_stop
+    if _active_stop is not None:
+        _active_stop()
+        _active_stop = None
+
     N  = sim.N
     px = cell_px if cell_px is not None else sim.cell_px
 
@@ -123,6 +132,20 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False):
                 pass
 
     atexit.register(_do_cleanup)
+
+    def _stop():
+        """Signal sim thread to quit and wait for cleanup."""
+        global _active_stop
+        st['running'] = False
+        if _alive[0]:
+            ctrl[_QUIT] = 1
+        # Give sim thread time to finish and call _do_cleanup
+        time.sleep(0.1)
+        _do_cleanup()
+        _active_stop = None
+
+    _active_stop = _stop
+    sim._stop_display = _stop
 
     # ── ipywidgets ─────────────────────────────────────────────────
     btn_pause = widgets.ToggleButton(
