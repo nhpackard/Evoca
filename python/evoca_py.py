@@ -71,6 +71,7 @@ class EvoCA:
         self.gdiff       = 0
         self.mu_lut      = 0.0
         self.mu_cgenom   = 0.0
+        self.tax         = 0.0
         self.cgenom      = 0
         self._setup_signatures()
 
@@ -99,6 +100,10 @@ class EvoCA:
         L.evoca_get_mu_lut.restype      = ctypes.c_float
         L.evoca_get_mu_cgenom.argtypes  = []
         L.evoca_get_mu_cgenom.restype   = ctypes.c_float
+        L.evoca_set_tax.argtypes        = [ctypes.c_float]
+        L.evoca_set_tax.restype         = None
+        L.evoca_get_tax.argtypes        = []
+        L.evoca_get_tax.restype         = ctypes.c_float
         L.evoca_set_v_all.argtypes      = [ctypes.POINTER(ctypes.c_uint8),
                                             ctypes.c_int]
         L.evoca_set_v_all.restype       = None
@@ -138,7 +143,7 @@ class EvoCA:
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     def init(self, N, food_inc=0.0, m_scale=1.0, food_repro=0.5, gdiff=0,
-             mu_lut=0.0, mu_cgenom=0.0):
+             mu_lut=0.0, mu_cgenom=0.0, tax=0.0):
         stop = getattr(self, '_stop_display', None)
         if stop is not None:
             stop()
@@ -150,10 +155,12 @@ class EvoCA:
         self.gdiff      = int(gdiff)
         self.mu_lut     = float(mu_lut)
         self.mu_cgenom  = float(mu_cgenom)
+        self.tax        = float(tax)
         self._lib.evoca_init(N, self.food_inc, self.m_scale, self.food_repro)
         self._lib.evoca_set_gdiff(self.gdiff)
         self._lib.evoca_set_mu_lut(self.mu_lut)
         self._lib.evoca_set_mu_cgenom(self.mu_cgenom)
+        self._lib.evoca_set_tax(self.tax)
 
     def free(self):
         stop = getattr(self, '_stop_display', None)
@@ -196,16 +203,21 @@ class EvoCA:
         self.mu_cgenom = float(m)
         self._lib.evoca_set_mu_cgenom(self.mu_cgenom)
 
+    def update_tax(self, t):
+        self.tax = float(t)
+        self._lib.evoca_set_tax(self.tax)
+
     # ── Params export ─────────────────────────────────────────────────
 
     _DEFAULTS = dict(food_inc=0.0, m_scale=1.0, food_repro=0.5,
-                      gdiff=0, mu_lut=0.0, mu_cgenom=0.0)
+                      gdiff=0, mu_lut=0.0, mu_cgenom=0.0, tax=0.0)
 
     def params(self):
         """Return current metaparameters as a dict suitable for init(**d)."""
         return dict(N=self._N, food_inc=self.food_inc, m_scale=self.m_scale,
                     food_repro=self.food_repro, gdiff=self.gdiff,
-                    mu_lut=self.mu_lut, mu_cgenom=self.mu_cgenom)
+                    mu_lut=self.mu_lut, mu_cgenom=self.mu_cgenom,
+                    tax=self.tax)
 
     def params_str(self):
         """Return a copy-pasteable sim.init(...) call with defaults annotated."""

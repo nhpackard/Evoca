@@ -56,14 +56,15 @@ The fiducial pattern for eating still uses the full 5×5 neighbourhood.
 
 **Food dynamics** each time step:
 1. `F(x) += food_inc` (uniform regeneration)
-2. Each cell eats: mouthful `M(x) = (m/25) · matches(C(x), c(x))` transferred from `F(x)` to `f(x)`
-3. Reproduction: when `f(x) >= food_repro`, copy genome to the Moore-neighbor with lowest `f(x')`; split food 50/50
+2. Tax: `f(x) -= tax`; if `f(x)` reaches 0, cell's LUT is zeroed (death)
+3. Each cell eats: `M(x) = (m/25) · matches · F(x)` (proportional to available food)
+4. Reproduction: when `f(x) >= food_repro`, copy genome to the Moore-neighbor with lowest `f(x')`; split food 50/50
 
 **Mutation** (applied to child's genome during reproduction):
 - `mu_lut`: per-bit flip probability for the 250-bit LUT. n_flips drawn from Poisson(mu_lut * 250).
 - `mu_cgenom`: per-bit flip probability for the 6-bit cgenom. n_flips drawn from Poisson(mu_cgenom * 6).
 
-**Global metaparameters**: `food_inc`, `m_scale`, `food_repro`, `gdiff`, `mu_lut`, `mu_cgenom`
+**Global metaparameters**: `food_inc`, `m_scale`, `food_repro`, `gdiff`, `mu_lut`, `mu_cgenom`, `tax`
 
 **Fiducial pattern `c(x)`**: D4-symmetric 5×5 binary pattern. The 25 cells form 6 orbits under D4 (reflections about horizontal/vertical midlines and diagonals), requiring 6 independent bits. The orbit map:
 

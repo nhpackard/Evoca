@@ -47,6 +47,7 @@ All metaparameters can be set at init or adjusted at runtime via sliders.
 | `gdiff`      | int   | 0       | [0, 10]        | Food diffusion passes (3x3 box blur) per step      |
 | `mu_lut`     | float | 0.0     | [0, 0.001]     | Per-bit LUT mutation probability on reproduction    |
 | `mu_cgenom`  | float | 0.0     | [0, 0.05]      | Per-bit cgenom mutation probability on reproduction |
+| `tax`        | float | 0.0     | [0, 0.1]       | Private food decrement per step; death if depleted  |
 
 ---
 
@@ -172,14 +173,24 @@ If `gdiff > 0`, perform `gdiff` passes of 3x3 box blur on F:
 Each pass uses a scratch buffer and pointer swap (double-buffered).
 Periodic boundary conditions.
 
+### Phase 2c: Tax and Death
+
+If `tax > 0`:
+
+    f(x) -= tax,   clamped to 0
+
+If `f(x)` reaches 0, the cell's LUT is zeroed out (all-zero genome:
+every neighborhood maps to state 0, so the cell always dies on the
+next CA step).  This creates survival pressure: cells must eat enough
+to offset the tax or lose their evolved rule.
+
 ### Phase 3: Eating
 
 For each cell:
 1. Compute fiducial matches (0-25) between 5x5 neighborhood and cgenom
-2. `mouthful = (m_scale / 25) * matches`
-3. Clamp to available food: `mouthful = min(mouthful, F(x))`
-4. Clamp to headroom: `mouthful = min(mouthful, 1.0 - f(x))`
-5. Transfer: `F(x) -= mouthful`,  `f(x) += mouthful`
+2. `mouthful = (m_scale / 25) * matches * F(x)` (proportional to available food)
+3. Clamp to headroom: `mouthful = min(mouthful, 1.0 - f(x))`
+4. Transfer: `F(x) -= mouthful`,  `f(x) += mouthful`
 
 Private food f(x) is hard-capped at 1.0.
 
@@ -234,7 +245,7 @@ sim = EvoCA(lib_path=None)
     # Load the shared library (auto-finds C/libevoca.dylib or .so)
 
 sim.init(N, food_inc=0.0, m_scale=1.0, food_repro=0.5, gdiff=0,
-         mu_lut=0.0, mu_cgenom=0.0)
+         mu_lut=0.0, mu_cgenom=0.0, tax=0.0)
     # Allocate N x N lattice, set metaparameters.
     # All grids initialized to zero.
 
@@ -251,6 +262,7 @@ sim.update_food_repro(r)     # float
 sim.update_gdiff(d)          # int
 sim.update_mu_lut(m)         # float, per-bit LUT mutation rate
 sim.update_mu_cgenom(m)      # float, per-bit cgenom mutation rate
+sim.update_tax(t)            # float, priv food decrement per step
 ```
 
 Each setter updates both the Python attribute (`sim.food_inc`, etc.)
@@ -311,7 +323,7 @@ After `init()` or the corresponding setter, these Python attributes
 reflect current values:
 
     sim.food_inc, sim.m_scale, sim.food_repro, sim.gdiff,
-    sim.mu_lut, sim.mu_cgenom, sim.cgenom
+    sim.mu_lut, sim.mu_cgenom, sim.tax, sim.cgenom
 
 ---
 
@@ -347,6 +359,7 @@ notebook cell.  Returns immediately (non-blocking).
 - **gdiff** slider: [0, 10], step 1
 - **mu_lut** slider: [0, 0.001], step 0.00001
 - **mu_cgenom** slider: [0, 0.05], step 0.001
+- **tax** slider: [0, 0.1], step 0.001
 - **Color** dropdown: state / env-food / priv-food / births
 - **Save Plots** button: saves probe strip charts to PNG (when paused)
 - **Fiducial pattern**: 5x5 matplotlib grid displayed above widgets

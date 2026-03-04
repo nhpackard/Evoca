@@ -47,6 +47,7 @@ void evoca_set_food_repro(float r);
 void evoca_set_gdiff(int d);
 void evoca_set_mu_lut(float m);
 void evoca_set_mu_cgenom(float m);
+void evoca_set_tax(float t);
 
 /* ── Bulk setters ───────────────────────────────────────────────────── */
 
@@ -72,7 +73,7 @@ void evoca_step(void);
    colormode 0: cell state with LUT-hashed genome color (wild-type=white)
    colormode 1: env food F as green; alive cells tinted red
    colormode 2: private food f as blue; alive cells tinted red
-   colormode 3: birth events (yellow=birth, dim=alive, black=dead) */
+   colormode 3: birth events (yellow=birth, magenta=mutant birth, dim=alive, black=dead) */
 void evoca_colorize(int32_t *pixels, int colormode);
 
 /* ── Accessors ──────────────────────────────────────────────────────── */
@@ -82,11 +83,12 @@ float   *evoca_get_F(void);
 float   *evoca_get_f(void);
 uint8_t *evoca_get_cgenom(void);
 uint8_t *evoca_get_lut(void);    /* [N*N * LUT_BYTES] */
-uint8_t *evoca_get_births(void); /* [N*N] birth events last step */
+uint8_t *evoca_get_births(void); /* [N*N] 0=none, 1=birth, 2=mutant birth */
 int      evoca_get_N(void);
 int      evoca_get_cell_px(void);
 int      evoca_get_gdiff(void);
 float    evoca_get_mu_lut(void);
 float    evoca_get_mu_cgenom(void);
+float    evoca_get_tax(void);
 
 #endif /* EVOCA_H */

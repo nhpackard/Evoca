@@ -235,6 +235,9 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     sl_mu_cgenom = widgets.FloatSlider(
         value=sim.mu_cgenom, min=0.0, max=0.05, step=0.001,
         description="mu_cgenom:", readout_format=".3f", **sl_kw)
+    sl_tax = widgets.FloatSlider(
+        value=sim.tax, min=0.0, max=0.1, step=0.001,
+        description="tax:", readout_format=".3f", **sl_kw)
 
     color_dd   = widgets.Dropdown(
         options=COLOR_MODES, value=COLOR_MODES[colormode],
@@ -258,7 +261,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     ipy_display(widgets.VBox([
         widgets.HBox([btn_pause, btn_step, btn_quit, btn_save, btn_export]),
         sl_food_inc, sl_m_scale, sl_food_repro, sl_gdiff,
-        sl_mu_lut, sl_mu_cgenom,
+        sl_mu_lut, sl_mu_cgenom, sl_tax,
         widgets.HBox([color_dd, status_lbl]),
     ]))
 
@@ -376,6 +379,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     _make_slider_cb("gdiff",      sl_gdiff)
     _make_slider_cb("mu_lut",     sl_mu_lut)
     _make_slider_cb("mu_cgenom",  sl_mu_cgenom)
+    _make_slider_cb("tax",        sl_tax)
 
     # ── Simulation thread ─────────────────────────────────────────
     def _sim_thread():

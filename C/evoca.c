@@ -101,6 +101,7 @@ static float  gfood_repro = 0.5f;
 static int    ggdiff      = 0;    /* diffusion passes per step */
 static float  gmu_lut     = 0.0f; /* per-bit LUT mutation rate */
 static float  gmu_cgenom  = 0.0f; /* per-bit cgenom mutation rate */
+static float  gtax        = 0.0f; /* priv food decrement per step */
 
 static uint8_t *v_curr = NULL;   /* [N*N]            */
 static uint8_t *v_next = NULL;   /* [N*N]            */
@@ -160,6 +161,8 @@ void  evoca_set_mu_lut(float m)    { gmu_lut     = m; }
 void  evoca_set_mu_cgenom(float m) { gmu_cgenom  = m; }
 float evoca_get_mu_lut(void)       { return gmu_lut;    }
 float evoca_get_mu_cgenom(void)    { return gmu_cgenom;  }
+void  evoca_set_tax(float t)      { gtax       = t; }
+float evoca_get_tax(void)         { return gtax;      }
 
 /* ── Bulk setters ───────────────────────────────────────────────── */
 
@@ -286,6 +289,20 @@ void evoca_step(void)
     /* Phase 2b: Food diffusion (gdiff passes of 3×3 box blur) */
     for (int d = 0; d < ggdiff; d++)
         diffuse_food_once();
+
+    /* Phase 2c: Tax — decrement private food; death if depleted */
+    if (gtax > 0.0f) {
+        for (size_t i = 0; i < cells; i++) {
+            f_priv[i] -= gtax;
+            if (f_priv[i] <= 0.0f) {
+                f_priv[i] = 0.0f;
+                /* Death: zero out LUT genome */
+                memset(lut + i * LUT_BYTES, 0, LUT_BYTES);
+                lut_color[i] = (uint32_t)hash_to_color(
+                    lut_hash_fn(lut + i * LUT_BYTES), wt_hash);
+            }
+        }
+    }
 
     /* Phase 3: Eating */
     for (int row = 0; row < N; row++) {
