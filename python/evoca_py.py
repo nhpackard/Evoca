@@ -3,21 +3,16 @@ evoca_py.py — Python ctypes wrapper for the EvoCA C library.
 
 LUT indexing
 ------------
-The LUT conditions on (v_x, n1, n2, n3, n4, n5):
+The LUT conditions on (v_x, n1, n2, n3):
   v_x ∈ {0,1}  — current cell state
-  n1  ∈ {0..4} — active cells at distance 1   (4 Moore neighbours)
-  n2  ∈ {0..4} — active cells at distance √2  (4 Moore neighbours)
-  n3  ∈ {0..4} — active cells at distance 2
-  n4  ∈ {0..8} — active cells at distance √5
-  n5  ∈ {0..4} — active cells at distance 2√2
+  n1  ∈ {0..4} — active cells at distance 1   (4 orthogonal Moore nbrs)
+  n2  ∈ {0..4} — active cells at distance √2  (4 diagonal Moore nbrs)
+  n3  ∈ {0..4} — active cells at distance 2   (4 axis-aligned)
 
-Flat bit index:  v_x*5625 + n1*1125 + n2*225 + n3*45 + n4*5 + n5
-Total bits:  2*5*5*5*9*5 = 11250  →  1407 bytes bit-packed per cell.
+Flat bit index:  v_x*125 + n1*25 + n2*5 + n3
+Total bits:  2*5*5*5 = 250  →  32 bytes bit-packed per cell.
 
-This per-ring count approach makes GoL exactly representable:
-  GoL only cares about (v_x, n1+n2); n3,n4,n5 are ignored.
-  A Euclidean-norm weighted sum S = Σ v·‖δ‖ conflates n1/n3 and
-  n2/n5 (dist 2 = 2×1, dist 2√2 = 2×√2), so GoL is not encodable.
+GoL is exactly encodable: it conditions on n1+n2 and ignores n3.
 """
 
 import ctypes
@@ -26,15 +21,15 @@ import os
 import numpy as np
 
 # ── LUT constants ──────────────────────────────────────────────────────
-LUT_BITS  = 11250   # 2*5*5*5*9*5
-LUT_BYTES = 1407    # ceil(11250/8)
+LUT_BITS  = 250   # 2*5*5*5
+LUT_BYTES = 32    # ceil(250/8)
 
 # Ring strides for flat index
-_S = (5625, 1125, 225, 45, 5, 1)   # (v_x, n1, n2, n3, n4, n5)
+_S = (125, 25, 5, 1)   # (v_x, n1, n2, n3)
 
 
-def lut_bit_index(v_x, n1, n2, n3, n4, n5):
-    return v_x*5625 + n1*1125 + n2*225 + n3*45 + n4*5 + n5
+def lut_bit_index(v_x, n1, n2, n3):
+    return v_x*125 + n1*25 + n2*5 + n3
 
 
 # D4-symmetric orbit map for the 5×5 fiducial pattern.
@@ -320,7 +315,7 @@ def make_gol_lut():
     GoL rule (B3/S23) on the Moore neighbourhood:
       dead  cell (v_x=0): birth  iff n1+n2 == 3
       alive cell (v_x=1): survive iff n1+n2 in {2, 3}
-      outer ring (n3, n4, n5) is ignored — GoL does not use it.
+      n3 is ignored — GoL does not use it.
 
     Returns a LUT_BYTES-length uint8 array (bit-packed).
     """
@@ -333,10 +328,6 @@ def make_gol_lut():
                     new_state = 1 if moore == 3 else 0
                 else:
                     new_state = 1 if moore in (2, 3) else 0
-                # same rule applies regardless of outer ring (n3,n4,n5)
                 for n3 in range(5):
-                    for n4 in range(9):
-                        for n5 in range(5):
-                            bit = lut_bit_index(v_x, n1, n2, n3, n4, n5)
-                            bits[bit] = new_state
+                    bits[lut_bit_index(v_x, n1, n2, n3)] = new_state
     return pack_lut(bits)

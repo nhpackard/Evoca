@@ -16,15 +16,13 @@ static inline uint32_t rng_next(void)
 /*
  * Distance-ring classification for each (di,dj) offset, indexed [di+2][dj+2].
  *
- * ring_map: which of the five rings (0-4) the cell belongs to
+ * ring_map: which of the three LUT rings (0-2) the cell belongs to
  *   0 : dist 1   (n1, 4 cells)
  *   1 : dist √2  (n2, 4 cells)
  *   2 : dist 2   (n3, 4 cells)
- *   3 : dist √5  (n4, 8 cells)
- *   4 : dist 2√2 (n5, 4 cells)
- *  -1 : centre   (ignored for LUT; v_x read separately)
+ *  -1 : centre or outside LUT neighbourhood (skipped)
  *
- * orbit_map: D4 orbit (0-5) for fiducial-pattern matching
+ * orbit_map: D4 orbit (0-5) for fiducial-pattern matching (full 5×5)
  *   0 : centre                    (1 cell)
  *   1 : dist-1 axis cells         (4 cells)
  *   2 : dist-2 axis cells         (4 cells)
@@ -33,11 +31,11 @@ static inline uint32_t rng_next(void)
  *   5 : dist-√5 off-axis cells    (8 cells)
  */
 static const int ring_map[5][5] = {
-    { 4,  3,  2,  3,  4},
-    { 3,  1,  0,  1,  3},
+    {-1, -1,  2, -1, -1},
+    {-1,  1,  0,  1, -1},
     { 2,  0, -1,  0,  2},
-    { 3,  1,  0,  1,  3},
-    { 4,  3,  2,  3,  4},
+    {-1,  1,  0,  1, -1},
+    {-1, -1,  2, -1, -1},
 };
 
 static const int orbit_map[5][5] = {
@@ -60,12 +58,14 @@ static inline void lut_flip(uint8_t *b, int bit)
     b[bit >> 3] ^= (uint8_t)(1u << (bit & 7));
 }
 
-/* FNV-1a hash of a LUT → 32-bit value for genome coloring */
+/* FNV-1a hash of a LUT → 32-bit value for genome coloring.
+ * Hashes as uint32_t words (LUT_BYTES=32 = 8 words, no remainder). */
 static uint32_t lut_hash_fn(const uint8_t *b)
 {
+    const uint32_t *w = (const uint32_t *)b;
     uint32_t h = 0x811c9dc5u;
-    for (int i = 0; i < LUT_BYTES; i++) {
-        h ^= b[i];
+    for (int i = 0; i < LUT_BYTES / 4; i++) {
+        h ^= w[i];
         h *= 0x01000193u;
     }
     return h;
@@ -201,25 +201,25 @@ void evoca_set_F_all(float F)
 
 /*
  * Compute the LUT bit index for cell at (row,col).
- * Counts active cells in each of the 5 distance rings separately,
+ * Counts active cells in rings n1 (dist 1), n2 (dist √2), n3 (dist 2),
  * plus reads v_x (current cell state) from v_curr.
  */
 static int compute_lut_bit(int row, int col)
 {
     int N  = gN;
     int v_x = v_curr[row * N + col];
-    int n[5] = {0, 0, 0, 0, 0};
+    int n[3] = {0, 0, 0};
 
     for (int di = -2; di <= 2; di++) {
         int r = ((row + di) % N + N) % N;
         for (int dj = -2; dj <= 2; dj++) {
             int ring = ring_map[di+2][dj+2];
-            if (ring < 0) continue;          /* skip centre */
+            if (ring < 0) continue;
             int c = ((col + dj) % N + N) % N;
             if (v_curr[r * N + c]) n[ring]++;
         }
     }
-    return LUT_IDX(v_x, n[0], n[1], n[2], n[3], n[4]);
+    return LUT_IDX(v_x, n[0], n[1], n[2]);
 }
 
 /* Count matches between actual 5×5 config and fiducial pattern. */

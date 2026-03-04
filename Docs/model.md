@@ -28,7 +28,7 @@ Every cell at position **x** carries:
 | Field       | Type    | Description                                     |
 |-------------|---------|-------------------------------------------------|
 | `v(x)`      | uint8   | Binary cell state: 0 (dead) or 1 (alive)        |
-| `lut(x)`    | 1407 B  | Bit-packed rule LUT (11250 bits)                 |
+| `lut(x)`    | 32 B    | Bit-packed rule LUT (250 bits)                   |
 | `cgenom(x)` | uint8   | 6-bit fiducial configuration genome (D4-symmetric) |
 | `f(x)`      | float   | Private food store, clamped to [0, 1]            |
 | `F(x)`      | float   | Environmental food at this location, clamped to [0, 1] |
@@ -53,41 +53,34 @@ All metaparameters can be set at init or adjusted at runtime via sliders.
 ## LUT Indexing (Per-Ring Counts)
 
 The LUT maps the local neighborhood configuration to a new cell state.
-It is indexed by `(v_x, n1, n2, n3, n4, n5)` where each `nk` is the
-count of active (v=1) cells in distance-ring k:
+It is indexed by `(v_x, n1, n2, n3)` where each `nk` is the count of
+active (v=1) cells in distance-ring k:
 
 | Ring | Distance | Offsets                            | Cells | Max count |
 |------|----------|------------------------------------|-------|-----------|
 | n1   | 1        | (+-1,0), (0,+-1)                   | 4     | 4         |
 | n2   | sqrt(2)  | (+-1,+-1)                          | 4     | 4         |
 | n3   | 2        | (+-2,0), (0,+-2)                   | 4     | 4         |
-| n4   | sqrt(5)  | (+-2,+-1), (+-1,+-2)               | 8     | 8         |
-| n5   | 2*sqrt(2)| (+-2,+-2)                          | 4     | 4         |
 
-**Flat bit index**: `v_x*5625 + n1*1125 + n2*225 + n3*45 + n4*5 + n5`
+**Flat bit index**: `v_x*125 + n1*25 + n2*5 + n3`
 
-**Total**: 2 x 5 x 5 x 5 x 9 x 5 = **11,250 bits = 1,407 bytes** per cell.
+**Total**: 2 x 5 x 5 x 5 = **250 bits = 32 bytes** per cell.
 
-**Ring map** (indexed by `[di+2][dj+2]`, -1 = centre):
+**Ring map** (indexed by `[di+2][dj+2]`, -1 = centre or outside LUT):
 
 ```
- 4   3   2   3   4
- 3   1   0   1   3
+-1  -1   2  -1  -1
+-1   1   0   1  -1
  2   0  -1   0   2
- 3   1   0   1   3
- 4   3   2   3   4
+-1   1   0   1  -1
+-1  -1   2  -1  -1
 ```
 
-**Design rationale**: An earlier design considered a Euclidean-norm
-weighted sum S_x = Σ v_{x+δ} · ‖δ‖, which weights each active
-neighbor by its distance.  Because the distance weights for n3 and n5
-are exact multiples of those for n1 and n2 (dist 2 = 2 × dist 1,
-dist 2√2 = 2 × dist √2), their contributions are conflated:
-different (n1, n3) combinations yield the same sum, so a rule that
-depends on n1 alone (e.g. GoL, which uses n1+n2) cannot be
-distinguished from one that trades n1 for n3.  Separate per-ring
-counts remove this ambiguity.  GoL (B3/S23) is exactly encodable:
-it conditions on n1+n2 and ignores n3, n4, n5.
+GoL (B3/S23) is exactly encodable: it conditions on n1+n2 and ignores n3.
+
+Note: the fiducial pattern for eating still uses the full 5x5
+neighbourhood (all 6 D4 orbits).  Only the CA rule LUT is restricted
+to 3 rings.
 
 ---
 
@@ -197,7 +190,7 @@ For each cell where `f(x) >= food_repro`:
    Ties broken by uniform random (xorshift32 PRNG).
 2. Copy parent genome to child: LUT, cgenom.
    (v_curr is dynamical state, NOT copied.)
-3. **Mutate child's LUT**: draw n_flips ~ Poisson(mu_lut * 11250),
+3. **Mutate child's LUT**: draw n_flips ~ Poisson(mu_lut * 250),
    flip that many random bits in the child's LUT.
 4. **Mutate child's cgenom**: draw n_flips ~ Poisson(mu_cgenom * 6),
    flip that many random bits in the child's cgenom.
@@ -223,7 +216,7 @@ All food values are clamped to [0, 1] before the float-to-uint8 cast.
 
 ### Genome coloring (mode 0)
 
-Each cell caches an ARGB color derived from an FNV-1a hash of its 1407-byte
+Each cell caches an ARGB color derived from an FNV-1a hash of its 32-byte
 LUT.  The hash computed by `set_lut_all()` is stored as the **wild-type hash**;
 any cell whose LUT hashes to this value displays as white.  Mutant genomes
 get pseudo-random colors from the lower 24 bits of their hash.
@@ -405,7 +398,7 @@ make_gol_lut() -> np.ndarray   # LUT_BYTES-length uint8
 Builds Conway's Game of Life (B3/S23) as a bit-packed LUT.
 - Dead cell (v_x=0): birth iff Moore count n1+n2 == 3
 - Alive cell (v_x=1): survive iff Moore count n1+n2 in {2, 3}
-- Outer rings (n3, n4, n5) are don't-cares (all combinations set).
+- n3 is a don't-care (all values set identically).
 
 With mutation=0 (all cells share this LUT), the simulation runs exact GoL.
 
@@ -429,15 +422,15 @@ cgenom_to_pattern(cg) -> np.ndarray   # (5, 5) uint8
 ### lut_bit_index
 
 ```python
-lut_bit_index(v_x, n1, n2, n3, n4, n5) -> int
+lut_bit_index(v_x, n1, n2, n3) -> int
     # Compute the flat bit index into the LUT.
 ```
 
 ### Constants
 
 ```python
-LUT_BITS  = 11250    # bits per LUT
-LUT_BYTES = 1407     # bytes per LUT (ceil(11250/8))
+LUT_BITS  = 250      # bits per LUT
+LUT_BYTES = 32       # bytes per LUT (ceil(250/8))
 ORBIT_MAP            # (5, 5) uint8 array of orbit indices
 ```
 
@@ -470,11 +463,11 @@ display scaling.  Change it and recompile.
 
 ### Memory
 
-Per cell: 1407 (LUT) + 1 (cgenom) + 1 (v_curr) + 1 (v_next) + 4 (f_priv)
-+ 4 (F_food) + 4 (F_temp) + 1 (births) + 4 (lut_color) = **1427 bytes**.
+Per cell: 32 (LUT) + 1 (cgenom) + 1 (v_curr) + 1 (v_next) + 4 (f_priv)
++ 4 (F_food) + 4 (F_temp) + 1 (births) + 4 (lut_color) = **52 bytes**.
 
-- N=256: ~93 MB
-- N=512: ~374 MB
+- N=256: ~3.4 MB
+- N=512: ~13.6 MB
 
 ### SDL2 on macOS
 

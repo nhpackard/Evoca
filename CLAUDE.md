@@ -33,27 +33,26 @@ Mouse click widget row: left `-` / right `+` to adjust food_inc / m_scale / food
 
 **CA lattice**: Binary 2D grid (periodic boundaries). Every cell carries:
 - `v(x)` — binary cell state (0 or 1)
-- Rule LUT (bit-packed, 1407 bytes/cell) — maps `(v_x, n1, n2, n3, n4, n5)` to new state
+- Rule LUT (bit-packed, 32 bytes/cell) — maps `(v_x, n1, n2, n3)` to new state
 - `c(x)` — fiducial configuration pattern (6-bit D4-symmetric genome for eating)
 - `f(x)` — private food store (float)
 
 **LUT indexing — per-ring counts**:
-The LUT is indexed by `(v_x, n1, n2, n3, n4, n5)` where `nk` = count of active cells in distance-ring k:
+The LUT is indexed by `(v_x, n1, n2, n3)` where `nk` = count of active cells in distance-ring k:
 
 | Ring | Distance | Cells | Max count |
 |---|---|---|---|
 | n1 | 1 | (±1,0),(0,±1) | 4 |
 | n2 | √2 | (±1,±1) | 4 |
 | n3 | 2 | (±2,0),(0,±2) | 4 |
-| n4 | √5 | (±2,±1),(±1,±2) | 8 |
-| n5 | 2√2 | (±2,±2) | 4 |
 
-Flat bit index: `v_x*5625 + n1*1125 + n2*225 + n3*45 + n4*5 + n5`
-Total: 2×5×5×5×9×5 = **11 250 bits = 1 407 bytes** (bit-packed) per cell.
+Flat bit index: `v_x*125 + n1*25 + n2*5 + n3`
+Total: 2×5×5×5 = **250 bits = 32 bytes** (bit-packed) per cell.
 
-**Why per-ring, not weighted sum**: An earlier design considered a Euclidean-norm weighted sum S = Σ v·‖δ‖ over the 5×5 neighbourhood. Because dist(n3) = 2 × dist(n1) and dist(n5) = 2 × dist(n2), these rings' contributions are conflated — a rule that depends on n1 alone (e.g. GoL, which uses n1+n2) cannot be distinguished from one that trades n1 for n3. Separate per-ring counts remove this ambiguity and make GoL exactly encodable.
+GoL is exactly encodable: it conditions on n1+n2 and ignores n3.
+The fiducial pattern for eating still uses the full 5×5 neighbourhood.
 
-**GoL initialization** (`make_gol_lut()`): sets new_state = 1 iff Moore count `n1+n2` == 3 (dead cell) or ∈ {2,3} (alive cell), regardless of n3/n4/n5. With mutation=0 (all cells keep the same LUT), the simulation runs exact Conway's Game of Life.
+**GoL initialization** (`make_gol_lut()`): sets new_state = 1 iff Moore count `n1+n2` == 3 (dead cell) or ∈ {2,3} (alive cell), regardless of n3. With mutation=0 (all cells keep the same LUT), the simulation runs exact Conway's Game of Life.
 
 **Food dynamics** each time step:
 1. `F(x) += food_inc` (uniform regeneration)
@@ -61,7 +60,7 @@ Total: 2×5×5×5×9×5 = **11 250 bits = 1 407 bytes** (bit-packed) per cell.
 3. Reproduction: when `f(x) >= food_repro`, copy genome to the Moore-neighbor with lowest `f(x')`; split food 50/50
 
 **Mutation** (applied to child's genome during reproduction):
-- `mu_lut`: per-bit flip probability for the 11250-bit LUT. n_flips drawn from Poisson(mu_lut * 11250).
+- `mu_lut`: per-bit flip probability for the 250-bit LUT. n_flips drawn from Poisson(mu_lut * 250).
 - `mu_cgenom`: per-bit flip probability for the 6-bit cgenom. n_flips drawn from Poisson(mu_cgenom * 6).
 
 **Global metaparameters**: `food_inc`, `m_scale`, `food_repro`, `gdiff`, `mu_lut`, `mu_cgenom`

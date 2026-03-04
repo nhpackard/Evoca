@@ -6,38 +6,33 @@
 /*
  * EvoCA — Evolutionary Cellular Automata core
  *
- * Rule space: outer-totalistic on 5×5 neighbourhood.
+ * Rule space: outer-totalistic on 3-ring neighbourhood (n1, n2, n3).
  *
- * The LUT is indexed by (v_x, n1, n2, n3, n4, n5) where:
+ * The LUT is indexed by (v_x, n1, n2, n3) where:
  *   v_x ∈ {0,1}   — current cell state
  *   n1  ∈ {0..4}  — active cells at distance 1  (orthogonal Moore nbrs)
  *   n2  ∈ {0..4}  — active cells at distance √2 (diagonal Moore nbrs)
  *   n3  ∈ {0..4}  — active cells at distance 2
- *   n4  ∈ {0..8}  — active cells at distance √5
- *   n5  ∈ {0..4}  — active cells at distance 2√2
  *
- * This separately-counted approach is required for exact GoL:
- *   Moore count = n1+n2; GoL ignores n3,n4,n5 and conditions on v_x.
- *   A Euclidean-norm weighted sum S = Σ v·‖δ‖ conflates n1/n3 and
- *   n2/n5 (dist 2 = 2×dist 1, dist 2√2 = 2×dist √2) and cannot
- *   represent rules that depend on n1 alone.
+ * GoL is exactly encodable: Moore count = n1+n2; GoL ignores n3.
  *
- * LUT size: 2 × 5 × 5 × 5 × 9 × 5 = 11250 bits  → 1407 bytes (bit-packed)
- * Flat bit index:  v_x*5625 + n1*1125 + n2*225 + n3*45 + n4*5 + n5
+ * LUT size: 2 × 5 × 5 × 5 = 250 bits  → 32 bytes (bit-packed)
+ * Flat bit index:  v_x*125 + n1*25 + n2*5 + n3
  *
  * Fiducial pattern c(x): D4-symmetric binary pattern on the 5×5 grid.
  * 6 independent bits (one per D4 orbit) in the lower 6 bits of cgenom.
+ * (The fiducial still uses the full 5×5 neighbourhood for eating.)
  */
 
-#define LUT_BITS  11250   /* 2*5*5*5*9*5 */
-#define LUT_BYTES  1407   /* ceil(11250/8) */
+#define LUT_BITS   250   /* 2*5*5*5 */
+#define LUT_BYTES   32   /* ceil(250/8) */
 
 /* Display scale: screen pixels per simulation cell.  Change and recompile. */
 #define CELL_PX  2
 
 /* Flat bit index from per-ring counts. */
-#define LUT_IDX(vx,n1,n2,n3,n4,n5) \
-    ((vx)*5625 + (n1)*1125 + (n2)*225 + (n3)*45 + (n4)*5 + (n5))
+#define LUT_IDX(vx,n1,n2,n3) \
+    ((vx)*125 + (n1)*25 + (n2)*5 + (n3))
 
 /* ── Lifecycle ─────────────────────────────────────────────────────── */
 
