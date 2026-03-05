@@ -217,6 +217,49 @@ static act_entry_t *act_find_or_insert(uint32_t key, int32_t color)
     return &act_vals[slot];
 }
 
+/* Prune extinct genomes with low activity to keep the table small.
+ * Keeps all alive genomes (pop_count > 0) and extinct genomes whose
+ * activity >= threshold.  Already-rendered strip-chart columns preserve
+ * the history; we only lose dim dots in *future* columns for pruned entries. */
+static void act_compact(uint64_t threshold)
+{
+    int keep = 0;
+    for (int i = 0; i < act_cap; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        if (act_vals[i].pop_count > 0 || act_vals[i].activity >= threshold)
+            keep++;
+    }
+
+    /* Pick capacity to keep load < 70% */
+    int new_cap = ACT_INIT_CAP;
+    while (new_cap * 7 < keep * 10 + 10) new_cap *= 2;
+
+    uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
+    act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+
+    for (int i = 0; i < act_cap; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        if (act_vals[i].pop_count == 0 && act_vals[i].activity < threshold)
+            continue;   /* prune */
+        uint32_t slot = act_keys[i] % (uint32_t)new_cap;
+        while (nk[slot] != ACT_EMPTY)
+            slot = (slot + 1) % (uint32_t)new_cap;
+        nk[slot] = act_keys[i];
+        nv[slot] = act_vals[i];
+    }
+
+    int old_cnt = act_cnt, old_cap = act_cap;
+    free(act_keys); free(act_vals);
+    act_keys = nk; act_vals = nv;
+    act_cap  = new_cap;
+    act_cnt  = keep;
+
+    if (g_diag)
+        fprintf(stderr, "DIAG: act_compact %d/%d -> %d/%d thresh=%llu (step=%u)\n",
+                old_cnt, old_cap, act_cnt, act_cap,
+                (unsigned long long)threshold, g_step);
+}
+
 static void evoca_activity_init(void)
 {
     act_cap = ACT_INIT_CAP;
@@ -571,6 +614,12 @@ void evoca_activity_update(void)
         e->pop_count++;
         e->activity++;
     }
+
+    /* Compact when table gets large — prune extinct low-activity entries.
+     * Threshold: keep extinct genomes with activity >= act_ymax/10, so they
+     * remain visible on the chart.  Trigger at 50k entries. */
+    if (act_cnt > 50000)
+        act_compact((uint64_t)act_ymax / 10);
 }
 
 void evoca_activity_render_col(int32_t *col, int height)
