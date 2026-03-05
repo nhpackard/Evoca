@@ -50,6 +50,8 @@ void evoca_set_mu_cgenom(float m);
 void evoca_set_tax(float t);
 void evoca_set_restricted_mu(int r);
 int  evoca_get_restricted_mu(void);
+void evoca_set_diag(int d);
+int  evoca_get_diag(void);
 
 /* ── Bulk setters ───────────────────────────────────────────────────── */
 

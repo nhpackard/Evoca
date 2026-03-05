@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 /* xorshift32 PRNG — stochastic tie-breaking in reproduction */
 static uint32_t g_rng = 0x12345678u;
@@ -103,6 +104,7 @@ static float  gmu_lut     = 0.0f; /* per-bit LUT mutation rate */
 static float  gmu_cgenom  = 0.0f; /* per-bit cgenom mutation rate */
 static float  gtax        = 0.0f; /* priv food decrement per step */
 static int    grestricted_mu = 0; /* 0=random mutation, 1=restricted to active bits */
+static int    g_diag        = 0; /* diagnostic prints */
 
 /* Restricted mutation: tracks which LUT bit indices are queried each step */
 static uint8_t lut_active[LUT_BYTES];   /* 250-bit mask */
@@ -181,6 +183,9 @@ static int          act_ymax = 2000; /* Y-scale for activity saturation */
 static void act_resize(void)
 {
     int new_cap = act_cap * 2;
+    if (g_diag)
+        fprintf(stderr, "DIAG: act_resize %d -> %d (cnt=%d, step=%u)\n",
+                act_cap, new_cap, act_cnt, g_step);
     uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
     act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
     for (int i = 0; i < act_cap; i++) {
@@ -291,6 +296,8 @@ void  evoca_set_restricted_mu(int r) { grestricted_mu = r; }
 int   evoca_get_restricted_mu(void)  { return grestricted_mu; }
 void  evoca_set_tax(float t)      { gtax       = t; }
 float evoca_get_tax(void)         { return gtax;      }
+void  evoca_set_diag(int d)      { g_diag     = d; }
+int   evoca_get_diag(void)       { return g_diag;    }
 
 /* ── Bulk setters ───────────────────────────────────────────────── */
 

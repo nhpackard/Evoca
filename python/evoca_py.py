@@ -109,6 +109,10 @@ class EvoCA:
         L.evoca_set_restricted_mu.restype  = None
         L.evoca_get_restricted_mu.argtypes = []
         L.evoca_get_restricted_mu.restype  = ctypes.c_int
+        L.evoca_set_diag.argtypes          = [ctypes.c_int]
+        L.evoca_set_diag.restype           = None
+        L.evoca_get_diag.argtypes          = []
+        L.evoca_get_diag.restype           = ctypes.c_int
         L.evoca_set_v_all.argtypes      = [ctypes.POINTER(ctypes.c_uint8),
                                             ctypes.c_int]
         L.evoca_set_v_all.restype       = None
