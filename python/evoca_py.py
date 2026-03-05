@@ -187,6 +187,13 @@ class EvoCA:
         L.evoca_set_cg_act_ymax.restype  = None
         L.evoca_get_cg_act_ymax.argtypes = []
         L.evoca_get_cg_act_ymax.restype  = ctypes.c_int
+        # LUT complexity
+        L.evoca_lut_complexity_counts.argtypes = [
+            ctypes.POINTER(ctypes.c_uint32)]
+        L.evoca_lut_complexity_counts.restype  = None
+        L.evoca_lut_complexity_render_col.argtypes = [
+            ctypes.POINTER(ctypes.c_int32), ctypes.c_int]
+        L.evoca_lut_complexity_render_col.restype  = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -417,6 +424,13 @@ class EvoCA:
         arr = np.ctypeslib.as_array(ptr, shape=(self._N * self._N * LUT_BYTES,))
         off = int(idx) * LUT_BYTES
         return arr[off:off + LUT_BYTES].copy()
+
+    def get_lut_complexity(self):
+        """Return LUT complexity counts: {n1: count, n2: count, n3: count}."""
+        counts = np.zeros(3, dtype=np.uint32)
+        self._lib.evoca_lut_complexity_counts(
+            counts.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)))
+        return {'n1': int(counts[0]), 'n2': int(counts[1]), 'n3': int(counts[2])}
 
     def get_repro_age_hist(self):
         """Return reproduction age histogram as a numpy array (copy)."""

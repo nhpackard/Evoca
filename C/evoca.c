@@ -698,6 +698,71 @@ int evoca_cg_activity_get(uint64_t *activities, uint32_t *pop_counts,
 void evoca_set_cg_act_ymax(int y) { cg_act_ymax = y > 1 ? y : 1; }
 int  evoca_get_cg_act_ymax(void)  { return cg_act_ymax; }
 
+/* ── LUT complexity classification ─────────────────────────────── */
+
+/* Return 1 (n1 only), 2 (n1+n2), or 3 (n1+n2+n3) for a given LUT. */
+static int lut_complexity(const uint8_t *b)
+{
+    /* Check n3-dependence: for each (v_x,n1,n2), all 5 n3 entries equal? */
+    for (int vx = 0; vx < 2; vx++)
+        for (int n1 = 0; n1 < 5; n1++)
+            for (int n2 = 0; n2 < 5; n2++) {
+                int base = LUT_IDX(vx, n1, n2, 0);
+                uint8_t first = lut_get(b, base);
+                for (int n3 = 1; n3 < 5; n3++)
+                    if (lut_get(b, base + n3) != first)
+                        return 3;
+            }
+
+    /* n3-independent. Check n2-dependence. */
+    for (int vx = 0; vx < 2; vx++)
+        for (int n1 = 0; n1 < 5; n1++) {
+            uint8_t first = lut_get(b, LUT_IDX(vx, n1, 0, 0));
+            for (int n2 = 1; n2 < 5; n2++)
+                if (lut_get(b, LUT_IDX(vx, n1, n2, 0)) != first)
+                    return 2;
+        }
+
+    return 1;
+}
+
+void evoca_lut_complexity_counts(uint32_t *counts)
+{
+    counts[0] = counts[1] = counts[2] = 0;
+    size_t cells = (size_t)gN * gN;
+    for (size_t i = 0; i < cells; i++) {
+        if (!v_curr[i]) continue;
+        int lvl = lut_complexity(lut + i * LUT_BYTES);
+        counts[lvl - 1]++;
+    }
+}
+
+void evoca_lut_complexity_render_col(int32_t *col, int height)
+{
+    uint32_t counts[3];
+    evoca_lut_complexity_counts(counts);
+    uint32_t total = counts[0] + counts[1] + counts[2];
+
+    /* Fill background */
+    for (int y = 0; y < height; y++)
+        col[y] = (int32_t)0xFF111111u;
+
+    if (total == 0) return;
+
+    /* Stacked from bottom: green (n1), yellow (n1+n2), red (full) */
+    int h1 = (int)((uint64_t)counts[0] * height / total);
+    int h2 = (int)((uint64_t)counts[1] * height / total);
+    int h3 = height - h1 - h2;
+
+    int y = height - 1;
+    for (int i = 0; i < h1 && y >= 0; i++, y--)
+        col[y] = (int32_t)0xFF00CC00u;   /* green: n1 only */
+    for (int i = 0; i < h2 && y >= 0; i++, y--)
+        col[y] = (int32_t)0xFFCCCC00u;   /* yellow: n1+n2 */
+    for (int i = 0; i < h3 && y >= 0; i++, y--)
+        col[y] = (int32_t)0xFFCC3300u;   /* red: full */
+}
+
 /* ── Visualisation ──────────────────────────────────────────────── */
 
 void evoca_colorize(int32_t *pixels, int colormode)

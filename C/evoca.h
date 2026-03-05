@@ -85,6 +85,11 @@ int  evoca_cg_activity_get(uint64_t *activities, uint32_t *pop_counts,
 void evoca_set_cg_act_ymax(int y);
 int  evoca_get_cg_act_ymax(void);
 
+/* ── LUT complexity ───────────────────────────────────────────────── */
+
+void evoca_lut_complexity_counts(uint32_t *counts);  /* counts[3]: n1, n1+n2, full */
+void evoca_lut_complexity_render_col(int32_t *col, int height);
+
 /* ── Visualisation ──────────────────────────────────────────────────── */
 
 /* Fill pixels[N*N] with int32 ARGB values.

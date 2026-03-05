@@ -141,6 +141,25 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
                                         buffer=cg_activity_shm.buf, offset=4)
         cg_activity_col = np.zeros(ACT_H, dtype=np.int32)
 
+    # ── LUT complexity probe setup ───────────────────────────────────
+    lut_complexity_enabled = bool((probes or {}).get('lut_complexity'))
+    lut_complexity_shm     = None
+    lut_complexity_cursor  = None
+    lut_complexity_pixels  = None
+    lut_complexity_col     = None
+
+    if lut_complexity_enabled:
+        lc_shm_size = 4 + PROBE_W * PROBE_H * 4
+        lut_complexity_shm = SharedMemory(create=True, size=lc_shm_size)
+        _lcbuf = np.ndarray((lc_shm_size,), dtype=np.uint8,
+                            buffer=lut_complexity_shm.buf)
+        _lcbuf[:] = 0
+        lut_complexity_cursor = np.ndarray((1,), dtype=np.int32,
+                                           buffer=lut_complexity_shm.buf)
+        lut_complexity_pixels = np.ndarray((PROBE_H, PROBE_W), dtype=np.int32,
+                                           buffer=lut_complexity_shm.buf, offset=4)
+        lut_complexity_col = np.zeros(PROBE_H, dtype=np.int32)
+
     # ── Probe setup ─────────────────────────────────────────────────
     probe_names = [k for k, v in (probes or {}).items() if v and k in _PROBE_GETTER]
     n_probes    = len(probe_names)
@@ -182,6 +201,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
         cmd += ["--activity=" + activity_shm.name]
     if cg_activity_enabled:
         cmd += ["--cg-activity=" + cg_activity_shm.name]
+    if lut_complexity_enabled:
+        cmd += ["--lut-complexity=" + lut_complexity_shm.name]
     sdl_proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
@@ -219,6 +240,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
             all_shm.append(activity_shm)
         if cg_activity_shm is not None:
             all_shm.append(cg_activity_shm)
+        if lut_complexity_shm is not None:
+            all_shm.append(lut_complexity_shm)
         for shm in all_shm:
             try:
                 shm.unlink()
@@ -386,6 +409,13 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
                 sim._lib.evoca_cg_activity_render_col(cga_col_ptr, ACT_H)
                 cg_activity_pixels[:, cga_cur] = cg_activity_col
                 cg_activity_cursor[0] = (cga_cur + 1) % PROBE_W
+            if lut_complexity_enabled:
+                lc_cur = int(lut_complexity_cursor[0])
+                lc_col_ptr = lut_complexity_col.ctypes.data_as(
+                    ctypes.POINTER(ctypes.c_int32))
+                sim._lib.evoca_lut_complexity_render_col(lc_col_ptr, PROBE_H)
+                lut_complexity_pixels[:, lc_cur] = lut_complexity_col
+                lut_complexity_cursor[0] = (lc_cur + 1) % PROBE_W
             status_lbl.value = f"t={st['step_cnt']}  (paused)"
 
     def on_quit(_):
@@ -537,6 +567,15 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
                 sim._lib.evoca_cg_activity_render_col(cga_col_ptr, ACT_H)
                 cg_activity_pixels[:, cga_cur] = cg_activity_col
                 cg_activity_cursor[0] = (cga_cur + 1) % PROBE_W
+
+            # Record LUT complexity data
+            if lut_complexity_enabled:
+                lc_cur = int(lut_complexity_cursor[0])
+                lc_col_ptr = lut_complexity_col.ctypes.data_as(
+                    ctypes.POINTER(ctypes.c_int32))
+                sim._lib.evoca_lut_complexity_render_col(lc_col_ptr, PROBE_H)
+                lut_complexity_pixels[:, lc_cur] = lut_complexity_col
+                lut_complexity_cursor[0] = (lc_cur + 1) % PROBE_W
 
             # FPS (only meaningful when running)
             t_now = time.perf_counter()

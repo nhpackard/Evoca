@@ -121,11 +121,14 @@ def main():
     # Optional activity probe (--activity=<shm_name>)
     activity_shm_name = None
     cg_activity_shm_name = None
+    lut_complexity_shm_name = None
     for arg in sys.argv:
         if arg.startswith("--activity="):
             activity_shm_name = arg[len("--activity="):]
         elif arg.startswith("--cg-activity="):
             cg_activity_shm_name = arg[len("--cg-activity="):]
+        elif arg.startswith("--lut-complexity="):
+            lut_complexity_shm_name = arg[len("--lut-complexity="):]
 
     ACT_H = 2 * PROBE_H  # 256
 
@@ -204,6 +207,24 @@ def main():
             print(f"EvoCA SDL: cg_activity SharedMemory open failed: {e}",
                   flush=True)
             cg_activity_shm_name = None
+
+    # Open LUT complexity shared memory
+    lut_complexity_shm     = None
+    lut_complexity_cursor  = None
+    lut_complexity_pixels  = None
+    if lut_complexity_shm_name:
+        try:
+            lut_complexity_shm = SharedMemory(name=lut_complexity_shm_name)
+            lut_complexity_cursor = np.ndarray((1,), dtype=np.int32,
+                                               buffer=lut_complexity_shm.buf)
+            lut_complexity_pixels = np.ndarray((PROBE_H, PROBE_W), dtype=np.int32,
+                                               buffer=lut_complexity_shm.buf, offset=4)
+            print(f"EvoCA SDL: lut_complexity shm opened ({PROBE_H}x{PROBE_W})",
+                  flush=True)
+        except Exception as e:
+            print(f"EvoCA SDL: lut_complexity SharedMemory open failed: {e}",
+                  flush=True)
+            lut_complexity_shm_name = None
 
     COLOR_MODES = ["state", "env-food", "priv-food", "births"]
 
@@ -389,6 +410,40 @@ def main():
         else:
             print("EvoCA SDL: cg_activity window creation failed", flush=True)
 
+    # ── LUT complexity window ──────────────────────────────────
+    lc_window_p  = None
+    lc_surface_p = None
+    lc_dst       = None
+    if lut_complexity_shm is not None:
+        lcw_x = main_x - PROBE_W
+        lcw = sdl2.SDL_CreateWindow(
+            b"lut_complexity",
+            lcw_x, next_probe_y,
+            PROBE_W, PROBE_H,
+            sdl2.SDL_WINDOW_SHOWN,
+        )
+        if lcw:
+            actual_y = ctypes.c_int(0)
+            sdl2.SDL_GetWindowPosition(lcw, None, ctypes.byref(actual_y))
+            next_probe_y = actual_y.value + PROBE_H + real_title_h
+            lps = sdl2.SDL_GetWindowSurface(lcw)
+            if lps:
+                sdl2.SDL_SetSurfaceBlendMode(lps, sdl2.SDL_BLENDMODE_NONE)
+                lsurf   = lps.contents
+                lp_i32  = lsurf.pitch // 4
+                lp_ptr  = ctypes.cast(lsurf.pixels,
+                                      ctypes.POINTER(ctypes.c_int32))
+                ld_flat = np.ctypeslib.as_array(lp_ptr,
+                                                shape=(PROBE_H * lp_i32,))
+                lc_dst       = ld_flat.reshape(PROBE_H, lp_i32)
+                lc_window_p  = lcw
+                lc_surface_p = lps
+                print("EvoCA SDL: lut_complexity window created", flush=True)
+            else:
+                sdl2.SDL_DestroyWindow(lcw)
+        else:
+            print("EvoCA SDL: lut_complexity window creation failed", flush=True)
+
     print("EvoCA SDL: entering main loop", flush=True)
 
     event = sdl2.SDL_Event()
@@ -447,6 +502,15 @@ def main():
             sdl2.SDL_UnlockSurface(cg_act_surface_p)
             sdl2.SDL_UpdateWindowSurface(cg_act_window_p)
 
+        # Render LUT complexity window
+        if lc_window_p is not None and lut_complexity_pixels is not None:
+            sdl2.SDL_LockSurface(lc_surface_p)
+            cur_lc = int(lut_complexity_cursor[0])
+            lc_dst[:PROBE_H, :PROBE_W] = np.roll(lut_complexity_pixels,
+                                                   -cur_lc, axis=1)
+            sdl2.SDL_UnlockSurface(lc_surface_p)
+            sdl2.SDL_UpdateWindowSurface(lc_window_p)
+
         # Window title
         step   = int(ctrl[2])
         mode   = COLOR_MODES[min(int(ctrl[1]), 3)]
@@ -460,6 +524,8 @@ def main():
         sdl2.SDL_SetWindowTitle(window_p, title.encode())
 
     print("EvoCA SDL: exiting cleanly", flush=True)
+    if lc_window_p is not None:
+        sdl2.SDL_DestroyWindow(lc_window_p)
     if cg_act_window_p is not None:
         sdl2.SDL_DestroyWindow(cg_act_window_p)
     if act_window_p is not None:
@@ -476,6 +542,8 @@ def main():
         activity_shm.close()
     if cg_activity_shm is not None:
         cg_activity_shm.close()
+    if lut_complexity_shm is not None:
+        lut_complexity_shm.close()
 
 
 if __name__ == "__main__":
