@@ -112,7 +112,84 @@ static float   *F_food = NULL;   /* [N*N]            */
 static float   *F_temp = NULL;   /* [N*N] scratch for diffusion */
 static uint8_t  *births    = NULL;   /* [N*N] birth events this step */
 static uint32_t *lut_color = NULL;   /* [N*N] cached ARGB per cell */
+static uint32_t *lut_hash_cache = NULL; /* [N*N] cached FNV-1a hash */
 static uint32_t  wt_hash   = 0;     /* hash of wild-type LUT */
+static uint32_t  g_step    = 0;     /* global step counter */
+
+/* ── Reproduction age histogram ────────────────────────────────── */
+
+#define REPRO_AGE_MAX 1024          /* bins 0..1023; overflow in last bin */
+
+static uint32_t *last_event_step = NULL;  /* [N*N] step of birth or repro */
+static uint32_t  repro_age_hist[REPRO_AGE_MAX]; /* cumulative histogram */
+static uint32_t  repro_age_t0 = 0;        /* start accumulating after this step */
+
+/* ── Activity hash table ───────────────────────────────────────── */
+
+#define ACT_INIT_CAP 4096
+#define ACT_EMPTY    0        /* key=0 is the empty sentinel */
+
+typedef struct {
+    uint64_t activity;    /* cumulative count */
+    uint32_t pop_count;   /* current population */
+    int32_t  color;       /* ARGB (same as lut_color) */
+} act_entry_t;
+
+static uint32_t    *act_keys = NULL;
+static act_entry_t *act_vals = NULL;
+static int          act_cap  = 0;
+static int          act_cnt  = 0;
+static int          act_ymax = 2000; /* Y-scale for activity saturation */
+
+static void act_resize(void)
+{
+    int new_cap = act_cap * 2;
+    uint32_t    *nk = calloc((size_t)new_cap, sizeof(uint32_t));
+    act_entry_t *nv = calloc((size_t)new_cap, sizeof(act_entry_t));
+    for (int i = 0; i < act_cap; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        uint32_t slot = act_keys[i] % (uint32_t)new_cap;
+        while (nk[slot] != ACT_EMPTY)
+            slot = (slot + 1) % (uint32_t)new_cap;
+        nk[slot] = act_keys[i];
+        nv[slot] = act_vals[i];
+    }
+    free(act_keys); free(act_vals);
+    act_keys = nk; act_vals = nv; act_cap = new_cap;
+}
+
+/* Find or insert; returns pointer to value entry. */
+static act_entry_t *act_find_or_insert(uint32_t key, int32_t color)
+{
+    if (act_cnt * 10 >= act_cap * 7) act_resize();
+    uint32_t slot = key % (uint32_t)act_cap;
+    while (act_keys[slot] != ACT_EMPTY) {
+        if (act_keys[slot] == key) return &act_vals[slot];
+        slot = (slot + 1) % (uint32_t)act_cap;
+    }
+    act_keys[slot] = key;
+    act_vals[slot].activity  = 0;
+    act_vals[slot].pop_count = 0;
+    act_vals[slot].color     = color;
+    act_cnt++;
+    return &act_vals[slot];
+}
+
+static void evoca_activity_init(void)
+{
+    act_cap = ACT_INIT_CAP;
+    act_cnt = 0;
+    act_keys = calloc((size_t)act_cap, sizeof(uint32_t));
+    act_vals = calloc((size_t)act_cap, sizeof(act_entry_t));
+}
+
+static void evoca_activity_free(void)
+{
+    free(act_keys);  act_keys = NULL;
+    free(act_vals);  act_vals = NULL;
+    act_cap = 0;
+    act_cnt = 0;
+}
 
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
@@ -134,6 +211,11 @@ void evoca_init(int N, float food_inc, float m_scale, float food_repro)
     F_temp = calloc(cells,               sizeof(float));
     births    = calloc(cells,               sizeof(uint8_t));
     lut_color = calloc(cells,               sizeof(uint32_t));
+    lut_hash_cache = calloc(cells,          sizeof(uint32_t));
+    last_event_step = calloc(cells,         sizeof(uint32_t));
+    memset(repro_age_hist, 0, sizeof(repro_age_hist));
+    g_step = 0;
+    evoca_activity_init();
 }
 
 void evoca_free(void)
@@ -147,6 +229,9 @@ void evoca_free(void)
     free(F_temp); F_temp = NULL;
     free(births);    births    = NULL;
     free(lut_color); lut_color = NULL;
+    free(lut_hash_cache); lut_hash_cache = NULL;
+    free(last_event_step); last_event_step = NULL;
+    evoca_activity_free();
     gN = 0;
 }
 
@@ -178,14 +263,18 @@ void evoca_set_lut_all(const uint8_t *lb)
         memcpy(lut + i * LUT_BYTES, lb, LUT_BYTES);
     wt_hash = lut_hash_fn(lb);
     int32_t wt_color = hash_to_color(wt_hash, wt_hash);  /* white */
-    for (size_t i = 0; i < cells; i++)
+    for (size_t i = 0; i < cells; i++) {
         lut_color[i] = (uint32_t)wt_color;
+        lut_hash_cache[i] = wt_hash;
+    }
 }
 
 void evoca_set_lut(int idx, const uint8_t *lb)
 {
     memcpy(lut + (size_t)idx * LUT_BYTES, lb, LUT_BYTES);
-    lut_color[idx] = (uint32_t)hash_to_color(lut_hash_fn(lb), wt_hash);
+    uint32_t h = lut_hash_fn(lb);
+    lut_color[idx] = (uint32_t)hash_to_color(h, wt_hash);
+    lut_hash_cache[idx] = h;
 }
 
 void evoca_set_cgenom_all(uint8_t cg) { memset(cgenom, cg, (size_t)gN * gN); }
@@ -269,6 +358,7 @@ void evoca_step(void)
 {
     int    N     = gN;
     size_t cells = (size_t)N * N;
+    g_step++;
 
     /* Phase 1: CA state update (double-buffered) */
     for (int row = 0; row < N; row++) {
@@ -298,8 +388,9 @@ void evoca_step(void)
                 f_priv[i] = 0.0f;
                 /* Death: zero out LUT genome */
                 memset(lut + i * LUT_BYTES, 0, LUT_BYTES);
-                lut_color[i] = (uint32_t)hash_to_color(
-                    lut_hash_fn(lut + i * LUT_BYTES), wt_hash);
+                uint32_t dh = lut_hash_fn(lut + i * LUT_BYTES);
+                lut_color[i] = (uint32_t)hash_to_color(dh, wt_hash);
+                lut_hash_cache[i] = dh;
             }
         }
     }
@@ -345,6 +436,16 @@ void evoca_step(void)
                 }
             }
             int child = best_r * N + best_c;
+
+            /* Record reproduction age and reset timestamps */
+            last_event_step[child] = g_step;  /* child just born */
+            if (g_step >= repro_age_t0 && last_event_step[idx] >= repro_age_t0) {
+                uint32_t age = g_step - last_event_step[idx];
+                if (age >= REPRO_AGE_MAX) age = REPRO_AGE_MAX - 1;
+                repro_age_hist[age]++;
+            }
+            last_event_step[idx] = g_step;    /* parent just reproduced */
+
             memcpy(lut + (size_t)child * LUT_BYTES,
                    lut + (size_t)idx   * LUT_BYTES, LUT_BYTES);
             cgenom[child] = cgenom[idx];
@@ -362,12 +463,15 @@ void evoca_step(void)
             /* births: 1 = normal, 2 = mutant */
             births[child] = (nf > 0 || nc > 0) ? 2 : 1;
 
-            /* Update cached genome color (skip expensive hash if unchanged) */
-            if (nf > 0)
-                lut_color[child] = (uint32_t)hash_to_color(
-                    lut_hash_fn(child_lut), wt_hash);
-            else
+            /* Update cached genome color + hash (skip if unchanged) */
+            if (nf > 0) {
+                uint32_t ch = lut_hash_fn(child_lut);
+                lut_color[child] = (uint32_t)hash_to_color(ch, wt_hash);
+                lut_hash_cache[child] = ch;
+            } else {
                 lut_color[child] = lut_color[idx];
+                lut_hash_cache[child] = lut_hash_cache[idx];
+            }
 
             /* v_curr is dynamical state, not genome — do not copy */
             float half    = f_priv[idx] * 0.5f;
@@ -375,6 +479,93 @@ void evoca_step(void)
             f_priv[child] = half;
         }
     }
+}
+
+/* ── Activity tracking ─────────────────────────────────────────── */
+
+void evoca_activity_update(void)
+{
+    if (!act_keys) return;
+    size_t cells = (size_t)gN * gN;
+
+    /* Clear all pop_counts */
+    for (int i = 0; i < act_cap; i++)
+        if (act_keys[i] != ACT_EMPTY)
+            act_vals[i].pop_count = 0;
+
+    /* Tally alive cells */
+    for (size_t i = 0; i < cells; i++) {
+        if (!v_curr[i]) continue;
+        act_entry_t *e = act_find_or_insert(lut_hash_cache[i],
+                                            (int32_t)lut_color[i]);
+        e->pop_count++;
+        e->activity++;
+    }
+}
+
+void evoca_activity_render_col(int32_t *col, int height)
+{
+    /* Fill with background */
+    for (int y = 0; y < height; y++)
+        col[y] = (int32_t)0xFF111111u;
+
+    if (!act_keys || act_cnt == 0) return;
+
+    /* Saturation formula: y = (H-1) - (H-1)*act/(act+ymax).
+     * Waves rise toward the top as activity >> ymax. */
+    uint64_t ymax = (uint64_t)act_ymax;
+
+    /* Per-pixel pop tracking for priority (higher pop overwrites) */
+    uint32_t ypop[height];
+    memset(ypop, 0, (size_t)height * sizeof(uint32_t));
+
+    /* Pass 1: extinct genomes (pop_count == 0) — dimmed color */
+    for (int i = 0; i < act_cap; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        if (act_vals[i].pop_count > 0) continue;
+        uint64_t act = act_vals[i].activity;
+        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
+        if (y < 0) y = 0;
+        if (y >= height) y = height - 1;
+        /* Dim: RGB × 0.15 */
+        uint32_t c = (uint32_t)act_vals[i].color;
+        uint8_t r = (uint8_t)(((c >> 16) & 0xFF) * 15 / 100);
+        uint8_t g = (uint8_t)(((c >>  8) & 0xFF) * 15 / 100);
+        uint8_t b = (uint8_t)(( c        & 0xFF) * 15 / 100);
+        col[y] = (int32_t)(0xFF000000u | ((uint32_t)r << 16)
+                           | ((uint32_t)g << 8) | b);
+    }
+
+    /* Pass 2: alive genomes — full color, higher pop wins */
+    for (int i = 0; i < act_cap; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        uint32_t pop = act_vals[i].pop_count;
+        if (pop == 0) continue;
+        uint64_t act = act_vals[i].activity;
+        int y = (height - 1) - (int)((uint64_t)(height - 1) * act / (act + ymax));
+        if (y < 0) y = 0;
+        if (y >= height) y = height - 1;
+        if (pop >= ypop[y]) {
+            col[y] = act_vals[i].color;
+            ypop[y] = pop;
+        }
+    }
+}
+
+int evoca_activity_get(uint32_t *keys, uint64_t *activities,
+                       uint32_t *pop_counts, int32_t *colors, int max_n)
+{
+    int n = 0;
+    if (!act_keys) return 0;
+    for (int i = 0; i < act_cap && n < max_n; i++) {
+        if (act_keys[i] == ACT_EMPTY) continue;
+        keys[n]       = act_keys[i];
+        activities[n] = act_vals[i].activity;
+        pop_counts[n] = act_vals[i].pop_count;
+        colors[n]     = act_vals[i].color;
+        n++;
+    }
+    return n;
 }
 
 /* ── Visualisation ──────────────────────────────────────────────── */
@@ -435,3 +626,11 @@ uint8_t *evoca_get_lut(void)    { return lut;    }
 uint8_t *evoca_get_births(void) { return births; }
 int      evoca_get_N(void)      { return gN;     }
 int      evoca_get_cell_px(void) { return CELL_PX; }
+void     evoca_set_act_ymax(int y) { act_ymax = y > 1 ? y : 1; }
+int      evoca_get_act_ymax(void)  { return act_ymax; }
+uint32_t *evoca_get_repro_age_hist(void) { return repro_age_hist; }
+int      evoca_get_repro_age_max(void)   { return REPRO_AGE_MAX; }
+uint32_t evoca_get_step(void)            { return g_step; }
+void     evoca_set_repro_age_t0(uint32_t t) { repro_age_t0 = t; }
+uint32_t evoca_get_repro_age_t0(void)       { return repro_age_t0; }
+void     evoca_reset_repro_age_hist(void)   { memset(repro_age_hist, 0, sizeof(repro_age_hist)); }

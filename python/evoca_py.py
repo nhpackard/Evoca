@@ -139,6 +139,34 @@ class EvoCA:
         L.evoca_get_N.restype           = ctypes.c_int
         L.evoca_get_cell_px.argtypes    = []
         L.evoca_get_cell_px.restype     = ctypes.c_int
+        L.evoca_set_act_ymax.argtypes   = [ctypes.c_int]
+        L.evoca_set_act_ymax.restype    = None
+        L.evoca_get_act_ymax.argtypes   = []
+        L.evoca_get_act_ymax.restype    = ctypes.c_int
+        L.evoca_get_repro_age_hist.argtypes = []
+        L.evoca_get_repro_age_hist.restype  = ctypes.POINTER(ctypes.c_uint32)
+        L.evoca_get_repro_age_max.argtypes  = []
+        L.evoca_get_repro_age_max.restype   = ctypes.c_int
+        L.evoca_get_step.argtypes           = []
+        L.evoca_get_step.restype            = ctypes.c_uint32
+        L.evoca_set_repro_age_t0.argtypes   = [ctypes.c_uint32]
+        L.evoca_set_repro_age_t0.restype    = None
+        L.evoca_get_repro_age_t0.argtypes   = []
+        L.evoca_get_repro_age_t0.restype    = ctypes.c_uint32
+        L.evoca_reset_repro_age_hist.argtypes = []
+        L.evoca_reset_repro_age_hist.restype  = None
+        L.evoca_activity_update.argtypes  = []
+        L.evoca_activity_update.restype   = None
+        L.evoca_activity_render_col.argtypes = [
+            ctypes.POINTER(ctypes.c_int32), ctypes.c_int]
+        L.evoca_activity_render_col.restype  = None
+        L.evoca_activity_get.argtypes   = [
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_int32),
+            ctypes.c_int]
+        L.evoca_activity_get.restype    = ctypes.c_int
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -206,6 +234,9 @@ class EvoCA:
     def update_tax(self, t):
         self.tax = float(t)
         self._lib.evoca_set_tax(self.tax)
+
+    def update_act_ymax(self, y):
+        self._lib.evoca_set_act_ymax(int(y))
 
     # ── Params export ─────────────────────────────────────────────────
 
@@ -315,6 +346,43 @@ class EvoCA:
         arr = np.ctypeslib.as_array(ptr, shape=(self._N * self._N * LUT_BYTES,))
         off = int(idx) * LUT_BYTES
         return arr[off:off + LUT_BYTES].copy()
+
+    def get_repro_age_hist(self):
+        """Return reproduction age histogram as a numpy array (copy)."""
+        n = self._lib.evoca_get_repro_age_max()
+        ptr = self._lib.evoca_get_repro_age_hist()
+        return np.ctypeslib.as_array(ptr, shape=(n,)).copy()
+
+    def set_repro_age_t0(self, t):
+        """Set the step at which reproduction age accumulation begins."""
+        self._lib.evoca_set_repro_age_t0(int(t))
+
+    def reset_repro_age_hist(self):
+        """Clear the reproduction age histogram."""
+        self._lib.evoca_reset_repro_age_hist()
+
+    def get_step(self):
+        """Return the current global step counter."""
+        return int(self._lib.evoca_get_step())
+
+    def get_activity(self, max_n=4096):
+        """Return activity table as dict of arrays.
+
+        Returns dict with keys: 'hash', 'activity', 'pop_count', 'color',
+        each a numpy array of length n (actual number of entries).
+        """
+        keys = np.zeros(max_n, dtype=np.uint32)
+        acts = np.zeros(max_n, dtype=np.uint64)
+        pops = np.zeros(max_n, dtype=np.uint32)
+        cols = np.zeros(max_n, dtype=np.int32)
+        n = self._lib.evoca_activity_get(
+            keys.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+            acts.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64)),
+            pops.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+            cols.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            max_n)
+        return {'hash': keys[:n], 'activity': acts[:n],
+                'pop_count': pops[:n], 'color': cols[:n]}
 
     @property
     def N(self):

@@ -67,6 +67,13 @@ void evoca_set_F_all(float F);
 
 void evoca_step(void);
 
+/* ── Activity tracking ─────────────────────────────────────────────── */
+
+void evoca_activity_update(void);
+void evoca_activity_render_col(int32_t *col, int height);
+int  evoca_activity_get(uint32_t *keys, uint64_t *activities,
+                        uint32_t *pop_counts, int32_t *colors, int max_n);
+
 /* ── Visualisation ──────────────────────────────────────────────────── */
 
 /* Fill pixels[N*N] with int32 ARGB values.
@@ -90,5 +97,13 @@ int      evoca_get_gdiff(void);
 float    evoca_get_mu_lut(void);
 float    evoca_get_mu_cgenom(void);
 float    evoca_get_tax(void);
+void     evoca_set_act_ymax(int y);
+int      evoca_get_act_ymax(void);
+uint32_t *evoca_get_repro_age_hist(void);
+int      evoca_get_repro_age_max(void);
+uint32_t evoca_get_step(void);
+void     evoca_set_repro_age_t0(uint32_t t);
+uint32_t evoca_get_repro_age_t0(void);
+void     evoca_reset_repro_age_hist(void);
 
 #endif /* EVOCA_H */

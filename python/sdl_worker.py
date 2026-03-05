@@ -113,10 +113,18 @@ def main():
     px = int(sys.argv[4])
     W, H = N * px, N * px
 
-    # Optional probe args
+    # Optional probe args (positional: argv[5]=probe_shm, argv[6]=names_csv)
     probe_shm_name = sys.argv[5] if len(sys.argv) > 6 else None
     probe_names    = sys.argv[6].split(",") if len(sys.argv) > 6 else []
     n_probes       = len(probe_names)
+
+    # Optional activity probe (--activity=<shm_name>)
+    activity_shm_name = None
+    for arg in sys.argv:
+        if arg.startswith("--activity="):
+            activity_shm_name = arg[len("--activity="):]
+
+    ACT_H = 2 * PROBE_H  # 256
 
     print(f"EvoCA SDL: starting  N={N} px={px}  probes={probe_names}", flush=True)
 
@@ -157,6 +165,24 @@ def main():
                 probe_stds.append(np.ndarray((PROBE_W,), dtype=np.float32,
                                              buffer=probe_shm.buf, offset=off))
                 off += PROBE_W * 4
+
+    # Open activity shared memory
+    activity_shm     = None
+    activity_cursor  = None
+    activity_pixels  = None
+    if activity_shm_name:
+        try:
+            activity_shm = SharedMemory(name=activity_shm_name)
+            activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                         buffer=activity_shm.buf)
+            activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
+                                         buffer=activity_shm.buf, offset=4)
+            print(f"EvoCA SDL: activity shm opened ({ACT_H}x{PROBE_W})",
+                  flush=True)
+        except Exception as e:
+            print(f"EvoCA SDL: activity SharedMemory open failed: {e}",
+                  flush=True)
+            activity_shm_name = None
 
     COLOR_MODES = ["state", "env-food", "priv-food", "births"]
 
@@ -273,6 +299,41 @@ def main():
         probe_yfix.append(_Y_FIXED.get(pname))
 
     print(f"EvoCA SDL: {len(probe_windows)} probe window(s) created", flush=True)
+
+    # ── Activity window ──────────────────────────────────────────
+    act_window_p  = None
+    act_surface_p = None
+    act_dst       = None
+    if activity_shm is not None:
+        aw_x = main_x - PROBE_W
+        aw = sdl2.SDL_CreateWindow(
+            b"activity",
+            aw_x, next_probe_y,
+            PROBE_W, ACT_H,
+            sdl2.SDL_WINDOW_SHOWN,
+        )
+        if aw:
+            actual_y = ctypes.c_int(0)
+            sdl2.SDL_GetWindowPosition(aw, None, ctypes.byref(actual_y))
+            next_probe_y = actual_y.value + ACT_H + real_title_h
+            aps = sdl2.SDL_GetWindowSurface(aw)
+            if aps:
+                sdl2.SDL_SetSurfaceBlendMode(aps, sdl2.SDL_BLENDMODE_NONE)
+                asurf   = aps.contents
+                ap_i32  = asurf.pitch // 4
+                ap_ptr  = ctypes.cast(asurf.pixels,
+                                      ctypes.POINTER(ctypes.c_int32))
+                ad_flat = np.ctypeslib.as_array(ap_ptr,
+                                                shape=(ACT_H * ap_i32,))
+                act_dst       = ad_flat.reshape(ACT_H, ap_i32)
+                act_window_p  = aw
+                act_surface_p = aps
+                print("EvoCA SDL: activity window created", flush=True)
+            else:
+                sdl2.SDL_DestroyWindow(aw)
+        else:
+            print("EvoCA SDL: activity window creation failed", flush=True)
+
     print("EvoCA SDL: entering main loop", flush=True)
 
     event = sdl2.SDL_Event()
@@ -313,6 +374,15 @@ def main():
                 sdl2.SDL_UnlockSurface(probe_surfaces[i])
                 sdl2.SDL_UpdateWindowSurface(probe_windows[i])
 
+        # Render activity window (scroll so newest column is on the right)
+        if act_window_p is not None and activity_pixels is not None:
+            sdl2.SDL_LockSurface(act_surface_p)
+            cur_act = int(activity_cursor[0])
+            act_dst[:ACT_H, :PROBE_W] = np.roll(activity_pixels, -cur_act,
+                                                  axis=1)
+            sdl2.SDL_UnlockSurface(act_surface_p)
+            sdl2.SDL_UpdateWindowSurface(act_window_p)
+
         # Window title
         step   = int(ctrl[2])
         mode   = COLOR_MODES[min(int(ctrl[1]), 3)]
@@ -326,6 +396,8 @@ def main():
         sdl2.SDL_SetWindowTitle(window_p, title.encode())
 
     print("EvoCA SDL: exiting cleanly", flush=True)
+    if act_window_p is not None:
+        sdl2.SDL_DestroyWindow(act_window_p)
     for pw in probe_windows:
         sdl2.SDL_DestroyWindow(pw)
     sdl2.SDL_DestroyWindow(window_p)
@@ -334,6 +406,8 @@ def main():
     ctrl_shm.close()
     if probe_shm is not None:
         probe_shm.close()
+    if activity_shm is not None:
+        activity_shm.close()
 
 
 if __name__ == "__main__":

@@ -102,6 +102,26 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     ctrl   = np.ndarray((5,),     dtype=np.int32, buffer=ctrl_shm.buf)
     ctrl[:] = [0, colormode, 0, 0, int(paused)]
 
+    # ── Activity probe setup ────────────────────────────────────────
+    activity_enabled = bool((probes or {}).get('activity'))
+    ACT_H = 2 * PROBE_H  # 256 pixels tall
+    activity_shm     = None
+    activity_cursor  = None   # int32 view
+    activity_pixels  = None   # int32[ACT_H, PROBE_W] view
+    activity_col     = None   # temp column buffer
+
+    if activity_enabled:
+        act_shm_size = 4 + PROBE_W * ACT_H * 4
+        activity_shm = SharedMemory(create=True, size=act_shm_size)
+        _abuf = np.ndarray((act_shm_size,), dtype=np.uint8,
+                           buffer=activity_shm.buf)
+        _abuf[:] = 0
+        activity_cursor = np.ndarray((1,), dtype=np.int32,
+                                     buffer=activity_shm.buf)
+        activity_pixels = np.ndarray((ACT_H, PROBE_W), dtype=np.int32,
+                                     buffer=activity_shm.buf, offset=4)
+        activity_col = np.zeros(ACT_H, dtype=np.int32)
+
     # ── Probe setup ─────────────────────────────────────────────────
     probe_names = [k for k, v in (probes or {}).items() if v and k in _PROBE_GETTER]
     n_probes    = len(probe_names)
@@ -139,6 +159,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
            pixel_shm.name, ctrl_shm.name, str(N), str(px)]
     if n_probes > 0:
         cmd += [probe_shm.name, ",".join(probe_names)]
+    if activity_enabled:
+        cmd += ["--activity=" + activity_shm.name]
     sdl_proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
@@ -172,6 +194,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
         all_shm = [pixel_shm, ctrl_shm]
         if probe_shm is not None:
             all_shm.append(probe_shm)
+        if activity_shm is not None:
+            all_shm.append(activity_shm)
         for shm in all_shm:
             try:
                 shm.unlink()
@@ -239,6 +263,14 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
         value=sim.tax, min=0.0, max=0.1, step=0.001,
         description="tax:", readout_format=".3f", **sl_kw)
 
+    sl_act_ymax = None
+    if activity_enabled:
+        sl_act_ymax = widgets.IntSlider(
+            value=2000, min=100, max=100000, step=100,
+            description="act_ymax:",
+            style={"description_width": "90px"},
+            layout=widgets.Layout(width="440px"))
+
     color_dd   = widgets.Dropdown(
         options=COLOR_MODES, value=COLOR_MODES[colormode],
         description="Color:",
@@ -258,10 +290,13 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     plt.tight_layout()
     plt.show()
 
+    _slider_list = [sl_food_inc, sl_m_scale, sl_food_repro, sl_gdiff,
+                    sl_mu_lut, sl_mu_cgenom, sl_tax]
+    if sl_act_ymax is not None:
+        _slider_list.append(sl_act_ymax)
     ipy_display(widgets.VBox([
         widgets.HBox([btn_pause, btn_step, btn_quit, btn_save, btn_export]),
-        sl_food_inc, sl_m_scale, sl_food_repro, sl_gdiff,
-        sl_mu_lut, sl_mu_cgenom, sl_tax,
+        *_slider_list,
         widgets.HBox([color_dd, status_lbl]),
     ]))
 
@@ -298,6 +333,14 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
                     probe_means[pi][cur] = farr.mean()
                     probe_stds[pi][cur]  = farr.std()
                 probe_cursor[0] = (cur + 1) % PROBE_W
+            if activity_enabled:
+                sim._lib.evoca_activity_update()
+                act_cur = int(activity_cursor[0])
+                act_col_ptr = activity_col.ctypes.data_as(
+                    ctypes.POINTER(ctypes.c_int32))
+                sim._lib.evoca_activity_render_col(act_col_ptr, ACT_H)
+                activity_pixels[:, act_cur] = activity_col
+                activity_cursor[0] = (act_cur + 1) % PROBE_W
             status_lbl.value = f"t={st['step_cnt']}  (paused)"
 
     def on_quit(_):
@@ -380,6 +423,8 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
     _make_slider_cb("mu_lut",     sl_mu_lut)
     _make_slider_cb("mu_cgenom",  sl_mu_cgenom)
     _make_slider_cb("tax",        sl_tax)
+    if sl_act_ymax is not None:
+        _make_slider_cb("act_ymax", sl_act_ymax)
 
     # ── Simulation thread ─────────────────────────────────────────
     def _sim_thread():
@@ -419,6 +464,16 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=False, probes=None)
                     probe_means[pi][cur] = farr.mean()
                     probe_stds[pi][cur]  = farr.std()
                 probe_cursor[0] = (cur + 1) % PROBE_W
+
+            # Record activity data
+            if activity_enabled:
+                sim._lib.evoca_activity_update()
+                act_cur = int(activity_cursor[0])
+                act_col_ptr = activity_col.ctypes.data_as(
+                    ctypes.POINTER(ctypes.c_int32))
+                sim._lib.evoca_activity_render_col(act_col_ptr, ACT_H)
+                activity_pixels[:, act_cur] = activity_col
+                activity_cursor[0] = (act_cur + 1) % PROBE_W
 
             # FPS (only meaningful when running)
             t_now = time.perf_counter()

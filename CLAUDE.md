@@ -76,5 +76,34 @@ The fiducial pattern for eating still uses the full 5×5 neighbourhood.
 4  5  2  5  4
 ```
 
+**Colormode 3 (births)**: yellow = normal birth (genome copied exactly),
+magenta = mutant birth (LUT or cgenom mutated), dim grey = alive (no birth),
+black = dead.
+
+**Activity tracking**: Cumulative presence of each distinct LUT genome.
+Each genome is identified by its FNV-1a hash (cached in `lut_hash_cache[N*N]`).
+An open-addressing hash table (`act_keys`/`act_vals`) maps hash → `{activity, pop_count, color}`.
+`evoca_activity_update()` clears pop_counts, scans alive cells, increments activity.
+`evoca_activity_render_col(col, height)` renders one column of the scrolling strip chart.
+Alive genomes in full color; extinct genomes dimmed (RGB × 0.15).
+
+**Activity Y-axis — saturation formula** (from genelife):
+`y = (H-1) - (H-1) * act / (act + ymax)`, where `act` is the cumulative activity
+count and `ymax` (default 2000, tunable via `act_ymax` slider) controls the vertical
+scale.  This is a hyperbolic saturation curve: `act=0` maps to `y=H-1` (bottom),
+`act=ymax` maps to `y=(H-1)/2` (mid-chart), and `act→∞` approaches `y=0` (top).
+New genomes start at the bottom and rise as they accumulate presence; the curve
+compresses high-activity genomes toward the top without clipping, giving a natural
+logarithmic-like spread.  Lowering `ymax` makes waves rise faster; raising it
+spreads out low-activity genomes.
+
+**Reproduction age histogram**: Tracks the distribution of time between successive
+reproduction events (or birth-to-first-reproduction). A per-cell timestamp
+`last_event_step[N*N]` records the step of each cell's most recent birth or
+reproduction. At each reproduction, `age = step - last_event_step[parent]` is
+binned into `repro_age_hist[1024]`. A configurable `repro_age_t0` (default 0)
+skips transient: only events where both the current step and the parent's last
+event are >= t0 are counted. `reset_repro_age_hist()` clears the histogram.
+
 **Performance** (CA step only, no food/repro, GoL LUT):
 N=256 → ~150 fps · N=512 → ~30 fps
