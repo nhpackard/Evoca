@@ -8,11 +8,15 @@ resources and reproduction.
 
 - [Grid State](#grid-state)
 - [Global Metaparameters](#global-metaparameters)
+- [Restricted Mutation](#restricted-mutation)
 - [LUT Indexing (Per-Ring Counts)](#lut-indexing-per-ring-counts)
 - [Fiducial Pattern c(x) and cgenom](#fiducial-pattern-cx-and-cgenom)
 - [Time Step Phases](#time-step-phases)
 - [Visualization (Color Modes)](#visualization-color-modes)
 - [Python API](#python-api)
+- [Activity Tracking](#activity-tracking)
+- [Probes](#probes)
+- [Reproduction Age Histogram](#reproduction-age-histogram)
 - [Controls and Display](#controls-and-display)
 - [LUT Helper Functions](#lut-helper-functions)
 - [Build](#build)
@@ -39,15 +43,34 @@ Every cell at position **x** carries:
 
 All metaparameters can be set at init or adjusted at runtime via sliders.
 
-| Name         | Type  | Default | Range (slider) | Description                                       |
-|--------------|-------|---------|----------------|---------------------------------------------------|
-| `food_inc`   | float | 0.0     | [0, 0.5]       | Environmental food added per cell per step         |
-| `m_scale`    | float | 1.0     | [0, 10]        | Mouthful scale factor for eating                   |
-| `food_repro` | float | 0.5     | [0, 2]         | Private food threshold triggering reproduction     |
-| `gdiff`      | int   | 0       | [0, 10]        | Food diffusion passes (3x3 box blur) per step      |
-| `mu_lut`     | float | 0.0     | [0, 0.001]     | Per-bit LUT mutation probability on reproduction    |
-| `mu_cgenom`  | float | 0.0     | [0, 0.05]      | Per-bit cgenom mutation probability on reproduction |
-| `tax`        | float | 0.0     | [0, 0.1]       | Private food decrement per step; death if depleted  |
+| Name            | Type  | Default | Range (slider) | Description                                          |
+|-----------------|-------|---------|----------------|------------------------------------------------------|
+| `food_inc`      | float | 0.0     | [0, 0.5]       | Environmental food added per cell per step            |
+| `m_scale`       | float | 1.0     | [0, 10]        | Mouthful scale factor for eating                      |
+| `food_repro`    | float | 0.5     | [0, 2]         | Private food threshold triggering reproduction        |
+| `gdiff`         | int   | 0       | [0, 10]        | Food diffusion passes (3x3 box blur) per step         |
+| `mu_lut`        | float | 0.0     | [0, 0.001]     | Per-bit LUT mutation probability on reproduction      |
+| `mu_cgenom`     | float | 0.0     | [0, 0.05]      | Per-bit cgenom mutation probability on reproduction   |
+| `tax`           | float | 0.0     | [0, 0.1]       | Private food decrement per step; death if depleted    |
+| `restricted_mu` | int   | 0       | checkbox       | If 1, restrict LUT mutations to dynamically active bits |
+
+---
+
+## Restricted Mutation
+
+When `restricted_mu=1`, LUT mutations are restricted to bit positions that
+were actually queried during the current CA step.
+
+During Phase 1, a 250-bit mask `lut_active` records which LUT indices were
+looked up.  Before Phase 4, the set bits are extracted into an `active_bits`
+array (typically 20-50 of 250 bits are active in typical dynamics).
+
+During reproduction, instead of `Poisson(mu_lut * 250)` flips at random
+positions, the mutation draws `Poisson(mu_lut * n_active)` flips from only
+the active positions.  This ensures every mutation is immediately phenotypic
+-- no silent mutations that change the genome hash without affecting dynamics.
+
+When `restricted_mu=0` (default), all 250 bits are eligible (original behavior).
 
 ---
 
@@ -158,7 +181,11 @@ Each call to `evoca_step()` executes five phases in order:
 
 Double-buffered.  For each cell, count active neighbors per ring,
 compute the LUT bit index, look up the new state from the cell's
-private LUT.  Then swap `v_curr` and `v_next`.
+private LUT.  The queried bit index is OR'd into the `lut_active`
+mask (for restricted mutation).  Then swap `v_curr` and `v_next`.
+
+If `restricted_mu` is enabled, the active bit indices are extracted
+into `active_bits[]` for use in Phase 4.
 
 ### Phase 2: Environmental Food Regeneration
 
@@ -201,8 +228,9 @@ For each cell where `f(x) >= food_repro`:
    Ties broken by uniform random (xorshift32 PRNG).
 2. Copy parent genome to child: LUT, cgenom.
    (v_curr is dynamical state, NOT copied.)
-3. **Mutate child's LUT**: draw n_flips ~ Poisson(mu_lut * 250),
-   flip that many random bits in the child's LUT.
+3. **Mutate child's LUT**: if `restricted_mu`, draw n_flips ~
+   Poisson(mu_lut * n_active) and flip only active bits; otherwise
+   draw n_flips ~ Poisson(mu_lut * 250) and flip random bits.
 4. **Mutate child's cgenom**: draw n_flips ~ Poisson(mu_cgenom * 6),
    flip that many random bits in the child's cgenom.
 5. Update child's cached genome color (FNV-1a hash of LUT).
@@ -234,6 +262,97 @@ get pseudo-random colors from the lower 24 bits of their hash.
 
 ---
 
+## Activity Tracking
+
+### LUT Activity
+
+Tracks cumulative presence of each distinct LUT genome over time.
+Each genome is identified by its FNV-1a hash (cached in `lut_hash_cache[N*N]`).
+An open-addressing hash table maps hash -> `{activity, pop_count, color}`.
+
+- `evoca_activity_update()`: clears pop_counts, scans alive cells, increments activity
+- `evoca_activity_render_col(col, height)`: renders one column of the scrolling
+  strip chart. Alive genomes in full color; extinct genomes dimmed (RGB x 0.15).
+
+**Y-axis saturation formula** (from genelife):
+
+    y = (H-1) - (H-1) * act / (act + ymax)
+
+This is a hyperbolic saturation curve: `act=0` maps to the bottom, `act=ymax`
+maps to mid-chart, and `act->inf` approaches the top.  Tunable via `act_ymax`
+slider (default 2000).
+
+Enable with `probes={'activity': True}`.
+
+### Cgenom Activity
+
+Mirrors LUT activity for the 6-bit cgenom (fiducial eating pattern).  Since
+there are only 2^6 = 64 possible cgenoms, uses fixed-size arrays instead of
+a hash table.  Wild-type cgenom is colored white; mutants get FNV-1a hash
+colors.  Separate `cg_act_ymax` slider.
+
+Enable with `probes={'cg_activity': True}`.
+
+---
+
+## Probes
+
+Probes are optional strip-chart windows enabled via the `probes` dict
+parameter to `run_with_controls()`.  Each probe renders in its own SDL
+window, stacked to the left of the main window.
+
+| Probe name       | Window size   | What it shows                                          |
+|------------------|---------------|--------------------------------------------------------|
+| `env_food`       | 512 x 128     | Mean +/- std of environmental food F(x) over time      |
+| `priv_food`      | 512 x 128     | Mean +/- std of private food f(x) over time            |
+| `births`         | 512 x 128     | Mean +/- std of births array over time                 |
+| `activity`       | 512 x 256     | LUT genome activity (scrolling hash-colored strip)     |
+| `cg_activity`    | 512 x 256     | Cgenom activity (scrolling hash-colored strip)         |
+| `lut_complexity` | 512 x 128     | Stacked area: green=n1 only, yellow=n1+n2, red=n1+n2+n3 |
+
+Example enabling multiple probes:
+
+```python
+run_with_controls(sim, probes={
+    'activity': True,
+    'cg_activity': True,
+    'lut_complexity': True,
+    'env_food': True,
+})
+```
+
+### LUT Complexity Probe
+
+Classifies each alive cell's LUT by the minimum ring set it depends on:
+
+- **Level 1** (green): rule depends only on (v_x, n1) — constant across n2 and n3
+- **Level 2** (yellow): rule depends on (v_x, n1, n2) — constant across n3
+- **Level 3** (red): rule depends on all three rings (v_x, n1, n2, n3)
+
+Dead cells are excluded from counts.  The stacked area chart shows population
+fractions at each complexity level over time.  Useful for studying whether
+evolution discovers higher-ring dependencies starting from simple n1-only rules.
+
+---
+
+## Reproduction Age Histogram
+
+Tracks the distribution of time between successive reproduction events
+(or birth-to-first-reproduction).  A per-cell timestamp `last_event_step[N*N]`
+records each cell's most recent birth or reproduction.  At each reproduction,
+`age = step - last_event_step[parent]` is binned into `repro_age_hist[1024]`.
+
+A configurable `repro_age_t0` (default 0) skips the transient: only events
+where both the current step and the parent's last event are >= t0 are counted.
+
+```python
+sim.set_repro_age_t0(1000)     # start accumulating after step 1000
+sim.reset_repro_age_hist()     # clear histogram
+hist = sim.get_repro_age_hist() # numpy array, 1024 bins
+```
+
+---
+
 ## Python API
 
 ### EvoCA class  (`python/evoca_py.py`)
@@ -245,7 +364,7 @@ sim = EvoCA(lib_path=None)
     # Load the shared library (auto-finds C/libevoca.dylib or .so)
 
 sim.init(N, food_inc=0.0, m_scale=1.0, food_repro=0.5, gdiff=0,
-         mu_lut=0.0, mu_cgenom=0.0, tax=0.0)
+         mu_lut=0.0, mu_cgenom=0.0, tax=0.0, restricted_mu=0)
     # Allocate N x N lattice, set metaparameters.
     # All grids initialized to zero.
 
@@ -263,6 +382,9 @@ sim.update_gdiff(d)          # int
 sim.update_mu_lut(m)         # float, per-bit LUT mutation rate
 sim.update_mu_cgenom(m)      # float, per-bit cgenom mutation rate
 sim.update_tax(t)            # float, priv food decrement per step
+sim.update_restricted_mu(r)  # int (0 or 1)
+sim.update_act_ymax(y)       # int, Y-scale for LUT activity chart
+sim.update_cg_act_ymax(y)    # int, Y-scale for cgenom activity chart
 ```
 
 Each setter updates both the Python attribute (`sim.food_inc`, etc.)
@@ -282,6 +404,17 @@ sim.set_lut(idx, lut_bytes)
 
 sim.set_cgenom_all(cg)
     # Set all cells' fiducial genome (6-bit value, masked to 0x3F).
+
+sim.set_cgenom_random()
+    # Set each cell's cgenom to a random value in [0, 63].
+    # No wild-type: all 64 cgenoms get distinct hash-based colors.
+
+sim.set_lut_random(n_init=3)
+    # Set each cell's LUT to an independent random rule.
+    # n_init: number of rings the rule conditions on (1, 2, or 3).
+    #   1: depends on (v_x, n1) only — 10 independent bits per LUT
+    #   2: depends on (v_x, n1, n2) — 50 independent bits
+    #   3: depends on (v_x, n1, n2, n3) — all 250 bits independent
 
 sim.set_f_all(f)
     # Set all cells' private food to float f.
@@ -313,8 +446,21 @@ sim.get_f()       -> np.ndarray   # (N, N) float32, private food (copy)
 sim.get_cgenom()  -> np.ndarray   # (N, N) uint8, fiducial genomes (copy)
 sim.get_births()  -> np.ndarray   # (N, N) uint8, birth events last step (copy)
 sim.get_lut(idx)  -> np.ndarray   # (LUT_BYTES,) uint8, one cell's LUT (copy)
+sim.get_step()    -> int           # current global step counter
 sim.N             -> int           # lattice size
 sim.cell_px       -> int           # CELL_PX compile-time constant
+
+# Activity and diagnostics
+sim.get_activity(max_n=4096) -> dict   # {'hash', 'activity', 'pop_count', 'color'}
+sim.get_cg_activity()        -> dict   # {'activity', 'pop_count', 'color'} (64 entries)
+sim.get_lut_complexity()     -> dict   # {'n1': count, 'n2': count, 'n3': count}
+sim.get_repro_age_hist()     -> np.ndarray  # (1024,) uint32 histogram
+sim.set_repro_age_t0(t)                # set step threshold for histogram accumulation
+sim.reset_repro_age_hist()             # clear histogram
+
+# Params export
+sim.params()      -> dict         # current metaparameters as dict
+sim.params_str()  -> str          # copy-pasteable sim.init(...) call
 ```
 
 #### Stored Attributes
@@ -323,7 +469,7 @@ After `init()` or the corresponding setter, these Python attributes
 reflect current values:
 
     sim.food_inc, sim.m_scale, sim.food_repro, sim.gdiff,
-    sim.mu_lut, sim.mu_cgenom, sim.tax, sim.cgenom
+    sim.mu_lut, sim.mu_cgenom, sim.tax, sim.restricted_mu, sim.cgenom
 
 ---
 
@@ -347,7 +493,7 @@ notebook cell.  Returns immediately (non-blocking).
 | `cell_px`   | int   | `sim.cell_px`  | Screen pixels per simulation cell    |
 | `colormode` | int   | 0              | Initial color mode (0/1/2/3)         |
 | `paused`    | bool  | False          | Start in paused state                |
-| `probes`    | dict  | None           | Probe names to enable, e.g. `{'env_food': True}` |
+| `probes`    | dict  | None           | Probe names to enable (see [Probes](#probes) for full list) |
 
 **Widgets**:
 - **Pause/Run** toggle button
@@ -360,8 +506,12 @@ notebook cell.  Returns immediately (non-blocking).
 - **mu_lut** slider: [0, 0.001], step 0.00001
 - **mu_cgenom** slider: [0, 0.05], step 0.001
 - **tax** slider: [0, 0.1], step 0.001
+- **act_ymax** slider: [100, 100000] (when activity probe enabled)
+- **cg_act_ymax** slider: [100, 100000] (when cg_activity probe enabled)
+- **restricted_mu** checkbox: toggle restricted mutation
 - **Color** dropdown: state / env-food / priv-food / births
 - **Save Plots** button: saves probe strip charts to PNG (when paused)
+- **Export Params** button: prints copy-pasteable `sim.init(...)` call
 - **Fiducial pattern**: 5x5 matplotlib grid displayed above widgets
 
 **SDL2 window title** shows: time step, FPS (when running), color mode,
@@ -477,7 +627,8 @@ display scaling.  Change it and recompile.
 ### Memory
 
 Per cell: 32 (LUT) + 1 (cgenom) + 1 (v_curr) + 1 (v_next) + 4 (f_priv)
-+ 4 (F_food) + 4 (F_temp) + 1 (births) + 4 (lut_color) = **52 bytes**.
++ 4 (F_food) + 4 (F_temp) + 1 (births) + 4 (lut_color) + 4 (lut_hash_cache)
++ 4 (last_event_step) = **60 bytes**.
 
 - N=256: ~3.4 MB
 - N=512: ~13.6 MB
