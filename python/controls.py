@@ -518,6 +518,7 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None,
         FPS_ALPHA = 0.05
         fps       = 0.0
         t_last    = time.perf_counter()
+        _t_loop_end = time.perf_counter()
 
         while st['running'] and ctrl[_QUIT] == 0:
 
@@ -532,10 +533,12 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None,
                 # Colorize so Step button results are shown; then rest.
                 sim.colorize(pixels, st['colormode'])
                 t_last = time.perf_counter()   # reset timer; avoid fps spike on resume
+                _t_loop_end = t_last
                 time.sleep(0.01)
                 continue
 
-            _t0 = time.perf_counter() if diag else 0
+            _t0 = time.perf_counter()
+            _gap = _t0 - _t_loop_end  # time between end of last iteration and start of this one
 
             sim.step()
             st['step_cnt'] += 1
@@ -589,17 +592,19 @@ def run_with_controls(sim, cell_px=None, colormode=0, paused=True, probes=None,
                 lut_complexity_pixels[:, lc_cur] = lut_complexity_col
                 lut_complexity_cursor[0] = (lc_cur + 1) % PROBE_W
 
+            _t4 = time.perf_counter()
             if diag:
-                _t4 = time.perf_counter()
                 _total = _t4 - _t0
-                if _total > 0.1:  # log steps taking > 100ms
+                if _gap > 0.05 or _total > 0.1:  # log gaps>50ms or steps>100ms
                     print(f"DIAG t={st['step_cnt']}: "
+                          f"gap={_gap*1000:.1f}ms "
                           f"step={(_t1-_t0)*1000:.1f}ms "
                           f"color={(_t2-_t1)*1000:.1f}ms "
                           f"activity={(_t3-_t2)*1000:.1f}ms "
                           f"probes={(_t4-_t3)*1000:.1f}ms "
                           f"total={_total*1000:.1f}ms",
                           flush=True)
+            _t_loop_end = _t4
 
             # FPS (only meaningful when running)
             t_now = time.perf_counter()

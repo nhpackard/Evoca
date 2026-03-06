@@ -521,6 +521,7 @@ def main():
         else:
             fps   = ctrl[3] / 10.0
             title = f"EvoCA  t={step}  fps={fps:.1f}  color={mode}"
+            sdl2.SDL_Delay(4)   # cap render ~250 fps; prevents 100% CPU spin
         sdl2.SDL_SetWindowTitle(window_p, title.encode())
 
     print("EvoCA SDL: exiting cleanly", flush=True)
